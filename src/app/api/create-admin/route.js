@@ -1,5 +1,4 @@
 import admin from "firebase-admin";
-import serviceAccount from "../../../../backend/serviceAccountKey.json"; // relative to route.js
 
 if (!admin.apps.length) {
 	admin.initializeApp({
