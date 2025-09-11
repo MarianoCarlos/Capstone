@@ -36,90 +36,148 @@ export default function VideoCallPage() {
 		},
 	]);
 
+	// helper: flush queued ICE to a given id
+	const flushIceQueueTo = (id) => {
+		if (!socket.current || !id) return;
+		iceQueue.current.forEach((candidate) => socket.current.emit("ice-candidate", { candidate, to: id }));
+		iceQueue.current = [];
+	};
+
 	useEffect(() => {
 		// Connect socket
 		socket.current = io(SOCKET_SERVER_URL);
+
+		socket.current.on("connect", () => {
+			console.log("✅ Connected to signaling server:", socket.current.id);
+		});
+		socket.current.on("connect_error", (err) => {
+			console.warn("Socket connect error:", err);
+		});
 
 		// Create PeerConnection
 		pc.current = new RTCPeerConnection({
 			iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
 		});
 
-		// Handle remote stream
-		pc.current.ontrack = (event) => {
-			if (remoteVideoRef.current) {
-				remoteVideoRef.current.srcObject = event.streams[0];
+		// Safety: ensure pc exists in handlers
+		const getPc = () => pc.current;
+
+		// When negotiation is needed (e.g. after adding tracks), create/send an offer
+		pc.current.onnegotiationneeded = async () => {
+			try {
+				const _pc = getPc();
+				if (!_pc) return;
+				const target = remoteIdRef.current;
+				if (!target) return; // nothing to offer to
+				const offer = await _pc.createOffer();
+				await _pc.setLocalDescription(offer);
+				socket.current.emit("offer", { sdp: offer, to: target });
+				console.log("🔀 Sent offer (onnegotiationneeded) to", target);
+			} catch (err) {
+				console.error("onnegotiationneeded error:", err);
 			}
 		};
 
-		// ICE candidates
+		// Handle remote stream
+		pc.current.ontrack = (event) => {
+			console.log("📹 ontrack event", event);
+			if (remoteVideoRef.current) {
+				remoteVideoRef.current.srcObject = event.streams[0];
+				// try to play (autoplay policies)
+				try {
+					remoteVideoRef.current.play().catch(() => {});
+				} catch (e) {}
+			}
+		};
+
+		// ICE candidates - send or queue
 		pc.current.onicecandidate = (event) => {
-			if (event.candidate) {
-				if (remoteIdRef.current) {
-					socket.current.emit("ice-candidate", {
-						candidate: event.candidate,
-						to: remoteIdRef.current,
-					});
+			if (event?.candidate) {
+				const target = remoteIdRef.current;
+				if (target && socket.current) {
+					socket.current.emit("ice-candidate", { candidate: event.candidate, to: target });
 				} else {
 					iceQueue.current.push(event.candidate);
 				}
 			}
 		};
 
-		// When a new user connects
+		// Optional: log connection state
+		pc.current.onconnectionstatechange = () => {
+			console.log("PC state:", pc.current?.connectionState);
+		};
+
+		// Socket handlers
 		socket.current.on("new-user", async (id) => {
+			console.log("🔔 new-user:", id);
 			setRemoteId(id);
 			remoteIdRef.current = id;
 
-			// Send queued ICE
-			iceQueue.current.forEach((candidate) =>
-				socket.current.emit("ice-candidate", {
-					candidate,
-					to: id,
-				})
-			);
-			iceQueue.current = [];
+			// flush ICE candidates to them
+			flushIceQueueTo(id);
 
-			// Make offer
+			// create offer if we already have local media
 			if (localVideoRef.current?.srcObject) {
 				try {
-					const offer = await pc.current.createOffer();
-					await pc.current.setLocalDescription(offer);
+					const _pc = getPc();
+					if (!_pc) return;
+					const offer = await _pc.createOffer();
+					await _pc.setLocalDescription(offer);
 					socket.current.emit("offer", { sdp: offer, to: id });
+					console.log("📡 Offer sent to", id);
 				} catch (err) {
-					console.error("Error creating offer:", err);
+					console.error("Error creating offer on new-user:", err);
 				}
 			}
 		});
 
-		// Handle offer
 		socket.current.on("offer", async (data) => {
-			setRemoteId(data.from);
-			remoteIdRef.current = data.from;
+			const fromId = data.from || data.sender || data.fromId;
+			if (!fromId) {
+				console.warn("offer without from id:", data);
+				return;
+			}
+			console.log("📥 offer received from", fromId);
+			setRemoteId(fromId);
+			remoteIdRef.current = fromId;
+
 			try {
-				await pc.current.setRemoteDescription(new RTCSessionDescription(data.sdp));
-				const answer = await pc.current.createAnswer();
-				await pc.current.setLocalDescription(answer);
-				socket.current.emit("answer", { sdp: answer, to: data.from });
+				const _pc = getPc();
+				if (!_pc) return;
+				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+				// flush any queued ICE candidates now that remote description is set
+				flushIceQueueTo(fromId);
+
+				const answer = await _pc.createAnswer();
+				await _pc.setLocalDescription(answer);
+				socket.current.emit("answer", { sdp: answer, to: fromId });
+				console.log("📡 answer sent to", fromId);
 			} catch (err) {
 				console.error("Error handling offer:", err);
 			}
 		});
 
-		// Handle answer
 		socket.current.on("answer", async (data) => {
+			const fromId = data.from || data.sender || data.fromId;
+			console.log("📥 answer received from", fromId);
 			try {
-				await pc.current.setRemoteDescription(new RTCSessionDescription(data.sdp));
+				const _pc = getPc();
+				if (!_pc) return;
+				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+				// flush ICE queue (in case we queued before knowing remote id)
+				flushIceQueueTo(fromId || remoteIdRef.current);
 			} catch (err) {
 				console.error("Error setting remote description (answer):", err);
 			}
 		});
 
-		// Handle ICE
-		socket.current.on("ice-candidate", async ({ candidate }) => {
+		socket.current.on("ice-candidate", async ({ candidate, from }) => {
+			// note: server now sends { candidate, from } - but be defensive
 			if (!candidate) return;
 			try {
-				await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
+				const _pc = getPc();
+				if (!_pc) return;
+				await _pc.addIceCandidate(new RTCIceCandidate(candidate));
 			} catch (err) {
 				console.error("Error adding ICE candidate:", err);
 			}
@@ -128,12 +186,26 @@ export default function VideoCallPage() {
 		// Join room
 		socket.current.emit("join-room", "my-room");
 
+		// cleanup
 		return () => {
-			socket.current.disconnect();
-			pc.current.close();
-			localVideoRef.current?.srcObject?.getTracks().forEach((t) => t.stop());
-			remoteVideoRef.current?.srcObject?.getTracks().forEach((t) => t.stop());
+			try {
+				socket.current?.disconnect();
+			} catch (e) {}
+			try {
+				// stop senders' tracks
+				pc.current?.getSenders()?.forEach((s) => {
+					try {
+						s.track?.stop();
+					} catch {}
+				});
+				pc.current?.close();
+			} catch (e) {}
+			try {
+				localVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
+				remoteVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
+			} catch (e) {}
 		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	const startVideo = async () => {
@@ -146,8 +218,42 @@ export default function VideoCallPage() {
 				video: true,
 				audio: true,
 			});
-			if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-			stream.getTracks().forEach((track) => pc.current.addTrack(track, stream));
+			if (localVideoRef.current) {
+				localVideoRef.current.srcObject = stream;
+				try {
+					localVideoRef.current.play().catch(() => {});
+				} catch (e) {}
+			}
+
+			// add tracks to peer connection (this will trigger onnegotiationneeded)
+			const _pc = pc.current;
+			if (!_pc) {
+				console.warn("No RTCPeerConnection instance");
+				return;
+			}
+
+			// Add tracks -- avoid duplicate add if already added
+			const existingSenders = _pc
+				.getSenders()
+				.map((s) => s.track)
+				.filter(Boolean);
+			stream.getTracks().forEach((track) => {
+				// if same kind is already being sent, skip adding duplicate
+				const already = existingSenders.find((t) => t && t.kind === track.kind);
+				if (!already) _pc.addTrack(track, stream);
+			});
+
+			// If a remote peer is already known, explicitly create an offer (some browsers require it)
+			if (remoteIdRef.current) {
+				try {
+					const offer = await _pc.createOffer();
+					await _pc.setLocalDescription(offer);
+					socket.current.emit("offer", { sdp: offer, to: remoteIdRef.current });
+					console.log("📡 Offer sent after startVideo to", remoteIdRef.current);
+				} catch (err) {
+					console.error("Error creating offer after startVideo:", err);
+				}
+			}
 		} catch (err) {
 			console.error("Error accessing media devices:", err);
 			alert("Please allow camera/microphone.");
@@ -201,7 +307,7 @@ export default function VideoCallPage() {
 								<FaMicrophone className="text-green-500" />
 							)}
 							{cameraOn ? (
-								<FaVideo className="text-green-500" />
+								<FaVideo className="textGreen-500" />
 							) : (
 								<FaVideoSlash className="text-red-500" />
 							)}
