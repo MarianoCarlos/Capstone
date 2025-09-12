@@ -54,21 +54,62 @@ export default function VideoCallPage() {
 			console.warn("Socket connect error:", err);
 		});
 
-		// Create PeerConnection
+		// Create PeerConnection with STUN/TURN
 		pc.current = new RTCPeerConnection({
-			iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+			iceServers: [
+				{
+					urls: "stun:stun.relay.metered.ca:80",
+				},
+				{
+					urls: "turn:global.relay.metered.ca:80",
+					username: "d32a9a3a2410a9814d92f496",
+					credential: "1pHpTSjADEGTm86/",
+				},
+				{
+					urls: "turn:global.relay.metered.ca:80?transport=tcp",
+					username: "d32a9a3a2410a9814d92f496",
+					credential: "1pHpTSjADEGTm86/",
+				},
+				{
+					urls: "turn:global.relay.metered.ca:443",
+					username: "d32a9a3a2410a9814d92f496",
+					credential: "1pHpTSjADEGTm86/",
+				},
+				{
+					urls: "turns:global.relay.metered.ca:443?transport=tcp",
+					username: "d32a9a3a2410a9814d92f496",
+					credential: "1pHpTSjADEGTm86/",
+				},
+
+				// ✅ OpenRelay fallback (no account needed)
+				{
+					urls: "turn:openrelay.metered.ca:80",
+					username: "openrelayproject",
+					credential: "openrelayproject",
+				},
+				{
+					urls: "turn:openrelay.metered.ca:443",
+					username: "openrelayproject",
+					credential: "openrelayproject",
+				},
+				{
+					urls: "turn:openrelay.metered.ca:443?transport=tcp",
+					username: "openrelayproject",
+					credential: "openrelayproject",
+				},
+			],
 		});
 
 		// Safety: ensure pc exists in handlers
 		const getPc = () => pc.current;
 
-		// When negotiation is needed (e.g. after adding tracks), create/send an offer
+		// When negotiation is needed
 		pc.current.onnegotiationneeded = async () => {
 			try {
 				const _pc = getPc();
 				if (!_pc) return;
 				const target = remoteIdRef.current;
-				if (!target) return; // nothing to offer to
+				if (!target) return;
 				const offer = await _pc.createOffer();
 				await _pc.setLocalDescription(offer);
 				socket.current.emit("offer", { sdp: offer, to: target });
@@ -83,7 +124,6 @@ export default function VideoCallPage() {
 			console.log("📹 ontrack event", event);
 			if (remoteVideoRef.current) {
 				remoteVideoRef.current.srcObject = event.streams[0];
-				// try to play (autoplay policies)
 				try {
 					remoteVideoRef.current.play().catch(() => {});
 				} catch (e) {}
@@ -102,7 +142,6 @@ export default function VideoCallPage() {
 			}
 		};
 
-		// Optional: log connection state
 		pc.current.onconnectionstatechange = () => {
 			console.log("PC state:", pc.current?.connectionState);
 		};
@@ -113,10 +152,8 @@ export default function VideoCallPage() {
 			setRemoteId(id);
 			remoteIdRef.current = id;
 
-			// flush ICE candidates to them
 			flushIceQueueTo(id);
 
-			// create offer if we already have local media
 			if (localVideoRef.current?.srcObject) {
 				try {
 					const _pc = getPc();
@@ -133,10 +170,7 @@ export default function VideoCallPage() {
 
 		socket.current.on("offer", async (data) => {
 			const fromId = data.from || data.sender || data.fromId;
-			if (!fromId) {
-				console.warn("offer without from id:", data);
-				return;
-			}
+			if (!fromId) return;
 			console.log("📥 offer received from", fromId);
 			setRemoteId(fromId);
 			remoteIdRef.current = fromId;
@@ -145,7 +179,6 @@ export default function VideoCallPage() {
 				const _pc = getPc();
 				if (!_pc) return;
 				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-				// flush any queued ICE candidates now that remote description is set
 				flushIceQueueTo(fromId);
 
 				const answer = await _pc.createAnswer();
@@ -164,15 +197,13 @@ export default function VideoCallPage() {
 				const _pc = getPc();
 				if (!_pc) return;
 				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-				// flush ICE queue (in case we queued before knowing remote id)
 				flushIceQueueTo(fromId || remoteIdRef.current);
 			} catch (err) {
 				console.error("Error setting remote description (answer):", err);
 			}
 		});
 
-		socket.current.on("ice-candidate", async ({ candidate, from }) => {
-			// note: server now sends { candidate, from } - but be defensive
+		socket.current.on("ice-candidate", async ({ candidate }) => {
 			if (!candidate) return;
 			try {
 				const _pc = getPc();
@@ -192,12 +223,7 @@ export default function VideoCallPage() {
 				socket.current?.disconnect();
 			} catch (e) {}
 			try {
-				// stop senders' tracks
-				pc.current?.getSenders()?.forEach((s) => {
-					try {
-						s.track?.stop();
-					} catch {}
-				});
+				pc.current?.getSenders()?.forEach((s) => s.track?.stop());
 				pc.current?.close();
 			} catch (e) {}
 			try {
@@ -205,9 +231,9 @@ export default function VideoCallPage() {
 				remoteVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
 			} catch (e) {}
 		};
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
+	// 🎥 Start video
 	const startVideo = async () => {
 		if (!navigator.mediaDevices?.getUserMedia) {
 			alert("Camera/microphone not supported.");
@@ -225,25 +251,18 @@ export default function VideoCallPage() {
 				} catch (e) {}
 			}
 
-			// add tracks to peer connection (this will trigger onnegotiationneeded)
 			const _pc = pc.current;
-			if (!_pc) {
-				console.warn("No RTCPeerConnection instance");
-				return;
-			}
+			if (!_pc) return;
 
-			// Add tracks -- avoid duplicate add if already added
 			const existingSenders = _pc
 				.getSenders()
 				.map((s) => s.track)
 				.filter(Boolean);
 			stream.getTracks().forEach((track) => {
-				// if same kind is already being sent, skip adding duplicate
 				const already = existingSenders.find((t) => t && t.kind === track.kind);
 				if (!already) _pc.addTrack(track, stream);
 			});
 
-			// If a remote peer is already known, explicitly create an offer (some browsers require it)
 			if (remoteIdRef.current) {
 				try {
 					const offer = await _pc.createOffer();
