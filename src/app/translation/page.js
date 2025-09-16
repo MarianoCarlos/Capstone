@@ -36,6 +36,11 @@ export default function VideoCallPage() {
 		},
 	]);
 
+	// negotiation state helpers
+	const makingOffer = useRef(false);
+	const ignoreOffer = useRef(false);
+	const isPolite = useRef(false); // polite/impolite role
+
 	// helper: flush queued ICE to a given id
 	const flushIceQueueTo = (id) => {
 		if (!socket.current || !id) return;
@@ -54,12 +59,10 @@ export default function VideoCallPage() {
 			console.warn("Socket connect error:", err);
 		});
 
-		// Create PeerConnection with STUN/TURN
+		// Create PeerConnection
 		pc.current = new RTCPeerConnection({
 			iceServers: [
-				{
-					urls: "stun:stun.relay.metered.ca:80",
-				},
+				{ urls: "stun:stun.relay.metered.ca:80" },
 				{
 					urls: "turn:global.relay.metered.ca:80",
 					username: "d32a9a3a2410a9814d92f496",
@@ -80,8 +83,7 @@ export default function VideoCallPage() {
 					username: "d32a9a3a2410a9814d92f496",
 					credential: "1pHpTSjADEGTm86/",
 				},
-
-				// ✅ OpenRelay fallback (no account needed)
+				// ✅ OpenRelay fallback
 				{
 					urls: "turn:openrelay.metered.ca:80",
 					username: "openrelayproject",
@@ -100,37 +102,35 @@ export default function VideoCallPage() {
 			],
 		});
 
-		// Safety: ensure pc exists in handlers
 		const getPc = () => pc.current;
 
-		// When negotiation is needed
+		// negotiationneeded
 		pc.current.onnegotiationneeded = async () => {
 			try {
+				makingOffer.current = true;
 				const _pc = getPc();
-				if (!_pc) return;
-				const target = remoteIdRef.current;
-				if (!target) return;
 				const offer = await _pc.createOffer();
 				await _pc.setLocalDescription(offer);
-				socket.current.emit("offer", { sdp: offer, to: target });
-				console.log("🔀 Sent offer (onnegotiationneeded) to", target);
+				socket.current.emit("offer", { sdp: _pc.localDescription, to: remoteIdRef.current });
+				console.log("🔀 Sent offer to", remoteIdRef.current);
 			} catch (err) {
 				console.error("onnegotiationneeded error:", err);
+			} finally {
+				makingOffer.current = false;
 			}
 		};
 
-		// Handle remote stream
+		// remote track
 		pc.current.ontrack = (event) => {
-			console.log("📹 ontrack event", event);
 			if (remoteVideoRef.current) {
 				remoteVideoRef.current.srcObject = event.streams[0];
 				try {
 					remoteVideoRef.current.play().catch(() => {});
-				} catch (e) {}
+				} catch {}
 			}
 		};
 
-		// ICE candidates - send or queue
+		// ICE candidates
 		pc.current.onicecandidate = (event) => {
 			if (event?.candidate) {
 				const target = remoteIdRef.current;
@@ -146,58 +146,53 @@ export default function VideoCallPage() {
 			console.log("PC state:", pc.current?.connectionState);
 		};
 
-		// Socket handlers
-		socket.current.on("new-user", async (id) => {
+		// socket handlers
+		socket.current.on("new-user", async (id, politeFlag) => {
 			console.log("🔔 new-user:", id);
 			setRemoteId(id);
 			remoteIdRef.current = id;
+			isPolite.current = politeFlag || false; // backend decides polite/impolite
 
 			flushIceQueueTo(id);
-
-			if (localVideoRef.current?.srcObject) {
-				try {
-					const _pc = getPc();
-					if (!_pc) return;
-					const offer = await _pc.createOffer();
-					await _pc.setLocalDescription(offer);
-					socket.current.emit("offer", { sdp: offer, to: id });
-					console.log("📡 Offer sent to", id);
-				} catch (err) {
-					console.error("Error creating offer on new-user:", err);
-				}
-			}
 		});
 
-		socket.current.on("offer", async (data) => {
-			const fromId = data.from || data.sender || data.fromId;
-			if (!fromId) return;
-			console.log("📥 offer received from", fromId);
-			setRemoteId(fromId);
-			remoteIdRef.current = fromId;
+		socket.current.on("offer", async ({ sdp, from }) => {
+			if (!from) return;
+			setRemoteId(from);
+			remoteIdRef.current = from;
+
+			const offerCollision = makingOffer.current || pc.current.signalingState !== "stable";
+			ignoreOffer.current = !isPolite.current && offerCollision;
+
+			if (ignoreOffer.current) {
+				console.warn("Ignoring offer due to collision");
+				return;
+			}
 
 			try {
-				const _pc = getPc();
-				if (!_pc) return;
-				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-				flushIceQueueTo(fromId);
+				if (offerCollision) {
+					await Promise.all([
+						pc.current.setLocalDescription({ type: "rollback" }),
+						pc.current.setRemoteDescription(new RTCSessionDescription(sdp)),
+					]);
+				} else {
+					await pc.current.setRemoteDescription(new RTCSessionDescription(sdp));
+				}
 
-				const answer = await _pc.createAnswer();
-				await _pc.setLocalDescription(answer);
-				socket.current.emit("answer", { sdp: answer, to: fromId });
-				console.log("📡 answer sent to", fromId);
+				const answer = await pc.current.createAnswer();
+				await pc.current.setLocalDescription(answer);
+				socket.current.emit("answer", { sdp: pc.current.localDescription, to: from });
+				console.log("📡 Answer sent to", from);
 			} catch (err) {
 				console.error("Error handling offer:", err);
 			}
 		});
 
-		socket.current.on("answer", async (data) => {
-			const fromId = data.from || data.sender || data.fromId;
-			console.log("📥 answer received from", fromId);
+		socket.current.on("answer", async ({ sdp, from }) => {
 			try {
-				const _pc = getPc();
-				if (!_pc) return;
-				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-				flushIceQueueTo(fromId || remoteIdRef.current);
+				await pc.current.setRemoteDescription(new RTCSessionDescription(sdp));
+				flushIceQueueTo(from || remoteIdRef.current);
+				console.log("📥 Answer received from", from);
 			} catch (err) {
 				console.error("Error setting remote description (answer):", err);
 			}
@@ -206,73 +201,66 @@ export default function VideoCallPage() {
 		socket.current.on("ice-candidate", async ({ candidate }) => {
 			if (!candidate) return;
 			try {
-				const _pc = getPc();
-				if (!_pc) return;
-				await _pc.addIceCandidate(new RTCIceCandidate(candidate));
+				await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
 			} catch (err) {
 				console.error("Error adding ICE candidate:", err);
 			}
 		});
 
-		// Join room
+		// ✅ handle remote disconnect
+		socket.current.on("user-disconnected", (id) => {
+			console.log("❌ Remote user disconnected:", id);
+			if (remoteVideoRef.current) {
+				remoteVideoRef.current.srcObject = null;
+			}
+			try {
+				pc.current?.close();
+			} catch {}
+			pc.current = null;
+			remoteIdRef.current = null;
+			setRemoteId(null);
+		});
+
+		// join room
 		socket.current.emit("join-room", "my-room");
 
-		// cleanup
 		return () => {
 			try {
-				socket.current?.disconnect();
-			} catch (e) {}
+				pc.current?.close(); // ✅ close first
+			} catch {}
 			try {
 				pc.current?.getSenders()?.forEach((s) => s.track?.stop());
-				pc.current?.close();
-			} catch (e) {}
+			} catch {}
 			try {
 				localVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
 				remoteVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
-			} catch (e) {}
+			} catch {}
+			try {
+				socket.current?.disconnect();
+			} catch {}
 		};
 	}, []);
 
-	// 🎥 Start video
+	// start video
 	const startVideo = async () => {
 		if (!navigator.mediaDevices?.getUserMedia) {
 			alert("Camera/microphone not supported.");
 			return;
 		}
+		if (localVideoRef.current?.srcObject) {
+			console.log("📷 Video already started");
+			return;
+		}
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({
-				video: true,
-				audio: true,
-			});
+			const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 			if (localVideoRef.current) {
 				localVideoRef.current.srcObject = stream;
 				try {
 					localVideoRef.current.play().catch(() => {});
-				} catch (e) {}
+				} catch {}
 			}
 
-			const _pc = pc.current;
-			if (!_pc) return;
-
-			const existingSenders = _pc
-				.getSenders()
-				.map((s) => s.track)
-				.filter(Boolean);
-			stream.getTracks().forEach((track) => {
-				const already = existingSenders.find((t) => t && t.kind === track.kind);
-				if (!already) _pc.addTrack(track, stream);
-			});
-
-			if (remoteIdRef.current) {
-				try {
-					const offer = await _pc.createOffer();
-					await _pc.setLocalDescription(offer);
-					socket.current.emit("offer", { sdp: offer, to: remoteIdRef.current });
-					console.log("📡 Offer sent after startVideo to", remoteIdRef.current);
-				} catch (err) {
-					console.error("Error creating offer after startVideo:", err);
-				}
-			}
+			stream.getTracks().forEach((track) => pc.current.addTrack(track, stream));
 		} catch (err) {
 			console.error("Error accessing media devices:", err);
 			alert("Please allow camera/microphone.");
@@ -295,7 +283,7 @@ export default function VideoCallPage() {
 	const speakText = (text, lang) => {
 		speechSynthesis.cancel();
 		const utterance = new SpeechSynthesisUtterance(text);
-		utterance.lang = lang === "Filipino" ? "fil-PH" : "en-US";
+		utterance.lang = lang === "Filipino" ? "tl-PH" : "en-US";
 		speechSynthesis.speak(utterance);
 	};
 	const toggleChatLang = (index) => {
@@ -326,7 +314,7 @@ export default function VideoCallPage() {
 								<FaMicrophone className="text-green-500" />
 							)}
 							{cameraOn ? (
-								<FaVideo className="textGreen-500" />
+								<FaVideo className="text-green-500" />
 							) : (
 								<FaVideoSlash className="text-red-500" />
 							)}
