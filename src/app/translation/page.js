@@ -64,9 +64,16 @@ export default function VideoCallPage() {
 		// Create PeerConnection
 		pc.current = new RTCPeerConnection({
 			iceServers: [
-				{ urls: "stun:stun.relay.metered.ca:80" },
+				{
+					urls: "stun:stun.relay.metered.ca:80",
+				},
 				{
 					urls: "turn:global.relay.metered.ca:80",
+					username: "d32a9a3a2410a9814d92f496",
+					credential: "1pHpTSjADEGTm86/",
+				},
+				{
+					urls: "turn:global.relay.metered.ca:80?transport=tcp",
 					username: "d32a9a3a2410a9814d92f496",
 					credential: "1pHpTSjADEGTm86/",
 				},
@@ -75,16 +82,10 @@ export default function VideoCallPage() {
 					username: "d32a9a3a2410a9814d92f496",
 					credential: "1pHpTSjADEGTm86/",
 				},
-				// OpenRelay fallback
 				{
-					urls: "turn:openrelay.metered.ca:80",
-					username: "openrelayproject",
-					credential: "openrelayproject",
-				},
-				{
-					urls: "turn:openrelay.metered.ca:443",
-					username: "openrelayproject",
-					credential: "openrelayproject",
+					urls: "turns:global.relay.metered.ca:443?transport=tcp",
+					username: "d32a9a3a2410a9814d92f496",
+					credential: "1pHpTSjADEGTm86/",
 				},
 			],
 		});
