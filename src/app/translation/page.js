@@ -10,7 +10,7 @@ export default function VideoCallPage() {
 	const remoteVideoRef = useRef(null);
 	const pc = useRef(null);
 	const socket = useRef(null);
-	const iceQueue = useRef([]); // <-- store ICE until remoteDescription is set
+	const iceQueue = useRef([]);
 	const remoteIdRef = useRef(null);
 
 	const [remoteId, setRemoteId] = useState(null);
@@ -36,32 +36,25 @@ export default function VideoCallPage() {
 		},
 	]);
 
-	// negotiation state helpers
-	const makingOffer = useRef(false);
-	const ignoreOffer = useRef(false);
-	const isPolite = useRef(false); // polite/impolite role
-
-	// helper: flush queued ICE candidates
-	const flushIceQueue = async () => {
-		while (iceQueue.current.length > 0 && pc.current?.remoteDescription) {
-			const candidate = iceQueue.current.shift();
-			try {
-				await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
-				console.log("✅ Added queued ICE candidate");
-			} catch (err) {
-				console.error("Error adding queued ICE:", err);
-			}
-		}
+	// helper: flush queued ICE to a given id
+	const flushIceQueueTo = (id) => {
+		if (!socket.current || !id) return;
+		iceQueue.current.forEach((candidate) => socket.current.emit("ice-candidate", { candidate, to: id }));
+		iceQueue.current = [];
 	};
 
 	useEffect(() => {
+		// Connect socket
 		socket.current = io(SOCKET_SERVER_URL);
 
 		socket.current.on("connect", () => {
 			console.log("✅ Connected to signaling server:", socket.current.id);
 		});
+		socket.current.on("connect_error", (err) => {
+			console.warn("Socket connect error:", err);
+		});
 
-		// Create PeerConnection
+		// Create PeerConnection with STUN/TURN
 		pc.current = new RTCPeerConnection({
 			iceServers: [
 				{
@@ -87,36 +80,57 @@ export default function VideoCallPage() {
 					username: "d32a9a3a2410a9814d92f496",
 					credential: "1pHpTSjADEGTm86/",
 				},
+
+				// ✅ OpenRelay fallback (no account needed)
+				{
+					urls: "turn:openrelay.metered.ca:80",
+					username: "openrelayproject",
+					credential: "openrelayproject",
+				},
+				{
+					urls: "turn:openrelay.metered.ca:443",
+					username: "openrelayproject",
+					credential: "openrelayproject",
+				},
+				{
+					urls: "turn:openrelay.metered.ca:443?transport=tcp",
+					username: "openrelayproject",
+					credential: "openrelayproject",
+				},
 			],
 		});
 
+		// Safety: ensure pc exists in handlers
 		const getPc = () => pc.current;
 
-		// negotiationneeded
+		// When negotiation is needed
 		pc.current.onnegotiationneeded = async () => {
 			try {
-				makingOffer.current = true;
 				const _pc = getPc();
+				if (!_pc) return;
+				const target = remoteIdRef.current;
+				if (!target) return;
 				const offer = await _pc.createOffer();
 				await _pc.setLocalDescription(offer);
-				socket.current.emit("offer", { sdp: _pc.localDescription, to: remoteIdRef.current });
-				console.log("🔀 Sent offer to", remoteIdRef.current);
+				socket.current.emit("offer", { sdp: offer, to: target });
+				console.log("🔀 Sent offer (onnegotiationneeded) to", target);
 			} catch (err) {
 				console.error("onnegotiationneeded error:", err);
-			} finally {
-				makingOffer.current = false;
 			}
 		};
 
-		// remote track
+		// Handle remote stream
 		pc.current.ontrack = (event) => {
+			console.log("📹 ontrack event", event);
 			if (remoteVideoRef.current) {
 				remoteVideoRef.current.srcObject = event.streams[0];
-				remoteVideoRef.current.play().catch(() => {});
+				try {
+					remoteVideoRef.current.play().catch(() => {});
+				} catch (e) {}
 			}
 		};
 
-		// local ICE candidates
+		// ICE candidates - send or queue
 		pc.current.onicecandidate = (event) => {
 			if (event?.candidate) {
 				const target = remoteIdRef.current;
@@ -128,96 +142,137 @@ export default function VideoCallPage() {
 			}
 		};
 
-		// socket handlers
-		socket.current.on("new-user", (id, politeFlag) => {
+		pc.current.onconnectionstatechange = () => {
+			console.log("PC state:", pc.current?.connectionState);
+		};
+
+		// Socket handlers
+		socket.current.on("new-user", async (id) => {
 			console.log("🔔 new-user:", id);
 			setRemoteId(id);
 			remoteIdRef.current = id;
-			isPolite.current = politeFlag || false;
+
+			flushIceQueueTo(id);
+
+			if (localVideoRef.current?.srcObject) {
+				try {
+					const _pc = getPc();
+					if (!_pc) return;
+					const offer = await _pc.createOffer();
+					await _pc.setLocalDescription(offer);
+					socket.current.emit("offer", { sdp: offer, to: id });
+					console.log("📡 Offer sent to", id);
+				} catch (err) {
+					console.error("Error creating offer on new-user:", err);
+				}
+			}
 		});
 
-		// handle offer
-		socket.current.on("offer", async ({ sdp, from }) => {
-			if (!from) return;
-			setRemoteId(from);
-			remoteIdRef.current = from;
-
-			const offerCollision = makingOffer.current || pc.current.signalingState !== "stable";
-			ignoreOffer.current = !isPolite.current && offerCollision;
-
-			if (ignoreOffer.current) {
-				console.warn("Ignoring offer due to collision");
-				return;
-			}
+		socket.current.on("offer", async (data) => {
+			const fromId = data.from || data.sender || data.fromId;
+			if (!fromId) return;
+			console.log("📥 offer received from", fromId);
+			setRemoteId(fromId);
+			remoteIdRef.current = fromId;
 
 			try {
-				if (offerCollision) {
-					await Promise.all([
-						pc.current.setLocalDescription({ type: "rollback" }),
-						pc.current.setRemoteDescription(new RTCSessionDescription(sdp)),
-					]);
-				} else {
-					await pc.current.setRemoteDescription(new RTCSessionDescription(sdp));
-				}
+				const _pc = getPc();
+				if (!_pc) return;
+				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+				flushIceQueueTo(fromId);
 
-				await flushIceQueue(); // ✅ flush queued ICE after remote description
-
-				const answer = await pc.current.createAnswer();
-				await pc.current.setLocalDescription(answer);
-				socket.current.emit("answer", { sdp: pc.current.localDescription, to: from });
-				console.log("📡 Answer sent to", from);
+				const answer = await _pc.createAnswer();
+				await _pc.setLocalDescription(answer);
+				socket.current.emit("answer", { sdp: answer, to: fromId });
+				console.log("📡 answer sent to", fromId);
 			} catch (err) {
 				console.error("Error handling offer:", err);
 			}
 		});
 
-		// handle answer
-		socket.current.on("answer", async ({ sdp, from }) => {
+		socket.current.on("answer", async (data) => {
+			const fromId = data.from || data.sender || data.fromId;
+			console.log("📥 answer received from", fromId);
 			try {
-				await pc.current.setRemoteDescription(new RTCSessionDescription(sdp));
-				await flushIceQueue(); // ✅ flush queued ICE after answer
-				console.log("📥 Answer received from", from);
+				const _pc = getPc();
+				if (!_pc) return;
+				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+				flushIceQueueTo(fromId || remoteIdRef.current);
 			} catch (err) {
 				console.error("Error setting remote description (answer):", err);
 			}
 		});
 
-		// handle remote ICE candidates
 		socket.current.on("ice-candidate", async ({ candidate }) => {
 			if (!candidate) return;
-			if (pc.current.remoteDescription) {
-				try {
-					await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
-					console.log("✅ Added ICE candidate");
-				} catch (err) {
-					console.error("Error adding ICE candidate:", err);
-				}
-			} else {
-				console.log("📥 Queuing ICE candidate (remoteDescription not set yet)");
-				iceQueue.current.push(candidate);
+			try {
+				const _pc = getPc();
+				if (!_pc) return;
+				await _pc.addIceCandidate(new RTCIceCandidate(candidate));
+			} catch (err) {
+				console.error("Error adding ICE candidate:", err);
 			}
 		});
 
-		// join room
+		// Join room
 		socket.current.emit("join-room", "my-room");
 
+		// cleanup
 		return () => {
 			try {
+				socket.current?.disconnect();
+			} catch (e) {}
+			try {
+				pc.current?.getSenders()?.forEach((s) => s.track?.stop());
 				pc.current?.close();
-			} catch {}
-			socket.current?.disconnect();
+			} catch (e) {}
+			try {
+				localVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
+				remoteVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
+			} catch (e) {}
 		};
 	}, []);
 
-	// start video
+	// 🎥 Start video
 	const startVideo = async () => {
+		if (!navigator.mediaDevices?.getUserMedia) {
+			alert("Camera/microphone not supported.");
+			return;
+		}
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+			const stream = await navigator.mediaDevices.getUserMedia({
+				video: true,
+				audio: true,
+			});
 			if (localVideoRef.current) {
 				localVideoRef.current.srcObject = stream;
-				localVideoRef.current.play().catch(() => {});
+				try {
+					localVideoRef.current.play().catch(() => {});
+				} catch (e) {}
 			}
-			stream.getTracks().forEach((track) => pc.current.addTrack(track, stream));
+
+			const _pc = pc.current;
+			if (!_pc) return;
+
+			const existingSenders = _pc
+				.getSenders()
+				.map((s) => s.track)
+				.filter(Boolean);
+			stream.getTracks().forEach((track) => {
+				const already = existingSenders.find((t) => t && t.kind === track.kind);
+				if (!already) _pc.addTrack(track, stream);
+			});
+
+			if (remoteIdRef.current) {
+				try {
+					const offer = await _pc.createOffer();
+					await _pc.setLocalDescription(offer);
+					socket.current.emit("offer", { sdp: offer, to: remoteIdRef.current });
+					console.log("📡 Offer sent after startVideo to", remoteIdRef.current);
+				} catch (err) {
+					console.error("Error creating offer after startVideo:", err);
+				}
+			}
 		} catch (err) {
 			console.error("Error accessing media devices:", err);
 			alert("Please allow camera/microphone.");
@@ -234,6 +289,19 @@ export default function VideoCallPage() {
 		const newCameraOn = !cameraOn;
 		localVideoRef.current?.srcObject?.getVideoTracks().forEach((t) => (t.enabled = newCameraOn));
 		setCameraOn(newCameraOn);
+	};
+
+	const copyText = (text) => navigator.clipboard.writeText(text);
+	const speakText = (text, lang) => {
+		speechSynthesis.cancel();
+		const utterance = new SpeechSynthesisUtterance(text);
+		utterance.lang = lang === "Filipino" ? "fil-PH" : "en-US";
+		speechSynthesis.speak(utterance);
+	};
+	const toggleChatLang = (index) => {
+		setTranslations((prev) =>
+			prev.map((item, i) => (i === index ? { ...item, showLang: item.showLang === "En" ? "Fil" : "En" } : item))
+		);
 	};
 
 	return (
@@ -258,7 +326,7 @@ export default function VideoCallPage() {
 								<FaMicrophone className="text-green-500" />
 							)}
 							{cameraOn ? (
-								<FaVideo className="text-green-500" />
+								<FaVideo className="textGreen-500" />
 							) : (
 								<FaVideoSlash className="text-red-500" />
 							)}
