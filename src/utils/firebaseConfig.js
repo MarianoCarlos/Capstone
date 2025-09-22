@@ -1,4 +1,4 @@
-// lib/firebaseConfig.js
+// utils/firebaseConfig.js
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getStorage } from "firebase/storage";

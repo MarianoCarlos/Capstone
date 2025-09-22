@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@mediapipe/hands": "^0.4.1675469240",
     "chart.js": "^4.5.0",
     "firebase": "^12.2.1",
     "firebase-admin": "^13.5.0",
