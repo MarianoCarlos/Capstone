@@ -281,45 +281,41 @@ export default function VideoCallPage() {
 		);
 	};
 
-	// Send frames (local + remote) to ASL backend
+	// Send local frames to ASL backend for live translation
 	useEffect(() => {
-		let intervalId;
-		if (callActive) {
-			intervalId = setInterval(async () => {
-				// Capture helper
-				const captureAndSend = async (videoEl, sender) => {
-					if (!videoEl || videoEl.readyState !== 4) return;
-					const canvas = document.createElement("canvas");
-					const ctx = canvas.getContext("2d");
-					canvas.width = videoEl.videoWidth;
-					canvas.height = videoEl.videoHeight;
-					ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+		if (!callActive) return;
 
-					canvas.toBlob(async (blob) => {
-						if (!blob) return;
-						const formData = new FormData();
-						formData.append("file", blob, "frame.jpg");
-						try {
-							const res = await fetch(ASL_BACKEND_URL, {
-								method: "POST",
-								body: formData,
-							});
-							const data = await res.json();
-							if (data.prediction) {
-								setLiveTranslation((prev) => (prev ? prev + " " + data.prediction : data.prediction));
-								// Optionally push directly to history:
-								// setTranslations(prev => [...prev, { sender, textEn: data.prediction, textFil: data.prediction, timestamp: new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}), showLang: "En" }])
-							}
-						} catch (err) {
-							console.error(`${sender} prediction error:`, err);
-						}
-					}, "image/jpeg");
-				};
+		let intervalId = setInterval(async () => {
+			if (!localVideoRef.current || localVideoRef.current.readyState !== 4) return;
 
-				await captureAndSend(localVideoRef.current, "local");
-				await captureAndSend(remoteVideoRef.current, "remote");
-			}, 1000);
-		}
+			const canvas = document.createElement("canvas");
+			const ctx = canvas.getContext("2d");
+			canvas.width = localVideoRef.current.videoWidth;
+			canvas.height = localVideoRef.current.videoHeight;
+			ctx.drawImage(localVideoRef.current, 0, 0, canvas.width, canvas.height);
+
+			canvas.toBlob(async (blob) => {
+				if (!blob) return;
+
+				const formData = new FormData();
+				formData.append("file", blob, "frame.jpg");
+
+				try {
+					const res = await fetch(ASL_BACKEND_URL, {
+						method: "POST",
+						body: formData,
+					});
+					const data = await res.json();
+					if (!data?.prediction) return;
+
+					// Update only local live translation
+					setLiveTranslation((prev) => (prev ? prev + " " + data.prediction : data.prediction));
+				} catch (err) {
+					console.error("Local prediction error:", err);
+				}
+			}, "image/jpeg");
+		}, 1000);
+
 		return () => clearInterval(intervalId);
 	}, [callActive]);
 
