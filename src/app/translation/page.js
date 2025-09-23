@@ -18,8 +18,8 @@ export default function VideoCallPage() {
 	const [isMuted, setIsMuted] = useState(false);
 	const [cameraOn, setCameraOn] = useState(true);
 	const [callActive, setCallActive] = useState(false);
-	const [liveTranslation, setLiveTranslation] = useState("");
 	const [translations, setTranslations] = useState([]);
+	const [currentWord, setCurrentWord] = useState("");
 
 	// Flush queued ICE candidates
 	const flushIceQueueTo = (id) => {
@@ -35,26 +35,16 @@ export default function VideoCallPage() {
 		socket.current.on("connect", () => console.log("✅ Connected:", socket.current.id));
 		socket.current.on("connect_error", (err) => console.warn("Socket error:", err));
 
+		// Listen for shared translations
+		socket.current.on("new-translation", (data) => {
+			setTranslations((prev) => [...prev, data]);
+		});
+
 		pc.current = new RTCPeerConnection({
 			iceServers: [
 				{ urls: "stun:stun.relay.metered.ca:80" },
 				{
 					urls: "turn:global.relay.metered.ca:80",
-					username: "d32a9a3a2410a9814d92f496",
-					credential: "1pHpTSjADEGTm86/",
-				},
-				{
-					urls: "turn:global.relay.metered.ca:80?transport=tcp",
-					username: "d32a9a3a2410a9814d92f496",
-					credential: "1pHpTSjADEGTm86/",
-				},
-				{
-					urls: "turn:global.relay.metered.ca:443",
-					username: "d32a9a3a2410a9814d92f496",
-					credential: "1pHpTSjADEGTm86/",
-				},
-				{
-					urls: "turns:global.relay.metered.ca:443?transport=tcp",
 					username: "d32a9a3a2410a9814d92f496",
 					credential: "1pHpTSjADEGTm86/",
 				},
@@ -65,11 +55,6 @@ export default function VideoCallPage() {
 				},
 				{
 					urls: "turn:openrelay.metered.ca:443",
-					username: "openrelayproject",
-					credential: "openrelayproject",
-				},
-				{
-					urls: "turn:openrelay.metered.ca:443?transport=tcp",
 					username: "openrelayproject",
 					credential: "openrelayproject",
 				},
@@ -103,17 +88,14 @@ export default function VideoCallPage() {
 			if (event?.candidate) {
 				const target = remoteIdRef.current;
 				if (target && socket.current) {
-					socket.current.emit("ice-candidate", {
-						candidate: event.candidate,
-						to: target,
-					});
+					socket.current.emit("ice-candidate", { candidate: event.candidate, to: target });
 				} else {
 					iceQueue.current.push(event.candidate);
 				}
 			}
 		};
 
-		// Socket events
+		// Socket events for peer connection
 		socket.current.on("new-user", async (id) => {
 			setRemoteId(id);
 			remoteIdRef.current = id;
@@ -183,14 +165,8 @@ export default function VideoCallPage() {
 			return;
 		}
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({
-				video: true,
-				audio: true,
-			});
-			if (localVideoRef.current) {
-				localVideoRef.current.srcObject = stream;
-				localVideoRef.current.play().catch(() => {});
-			}
+			const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+			if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
 			const _pc = pc.current;
 			if (!_pc) return;
@@ -207,10 +183,7 @@ export default function VideoCallPage() {
 			if (remoteIdRef.current) {
 				const offer = await _pc.createOffer();
 				await _pc.setLocalDescription(offer);
-				socket.current.emit("offer", {
-					sdp: offer,
-					to: remoteIdRef.current,
-				});
+				socket.current.emit("offer", { sdp: offer, to: remoteIdRef.current });
 			}
 		} catch (err) {
 			console.error(err);
@@ -270,46 +243,37 @@ export default function VideoCallPage() {
 	};
 	const toggleChatLang = (index) => {
 		setTranslations((prev) =>
-			prev.map((item, i) =>
-				i === index
-					? {
-							...item,
-							showLang: item.showLang === "En" ? "Fil" : "En",
-					  }
-					: item
-			)
+			prev.map((item, i) => (i === index ? { ...item, showLang: item.showLang === "En" ? "Fil" : "En" } : item))
 		);
 	};
 
-	// Send local frames to ASL backend for live translation
 	useEffect(() => {
 		if (!callActive) return;
 
-		let intervalId = setInterval(async () => {
+		const intervalId = setInterval(async () => {
 			if (!localVideoRef.current || localVideoRef.current.readyState !== 4) return;
 
 			const canvas = document.createElement("canvas");
-			const ctx = canvas.getContext("2d");
 			canvas.width = localVideoRef.current.videoWidth;
 			canvas.height = localVideoRef.current.videoHeight;
+			const ctx = canvas.getContext("2d");
 			ctx.drawImage(localVideoRef.current, 0, 0, canvas.width, canvas.height);
 
 			canvas.toBlob(async (blob) => {
 				if (!blob) return;
-
 				const formData = new FormData();
 				formData.append("file", blob, "frame.jpg");
 
 				try {
-					const res = await fetch(ASL_BACKEND_URL, {
-						method: "POST",
-						body: formData,
-					});
+					const res = await fetch(ASL_BACKEND_URL, { method: "POST", body: formData });
 					const data = await res.json();
 					if (!data?.prediction) return;
 
-					// Update only local live translation
-					setLiveTranslation((prev) => (prev ? prev + " " + data.prediction : data.prediction));
+					// Append new letter to buffer if changed
+					setCurrentWord((prev) => {
+						if (prev.endsWith(data.prediction)) return prev; // avoid duplicates
+						return prev + data.prediction;
+					});
 				} catch (err) {
 					console.error("Local prediction error:", err);
 				}
@@ -319,6 +283,23 @@ export default function VideoCallPage() {
 		return () => clearInterval(intervalId);
 	}, [callActive]);
 
+	// Enter key handler for sending translation
+	const sendTranslation = () => {
+		if (!currentWord.trim() || !socket.current) return;
+
+		const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+		const translationObj = {
+			sender: "local",
+			textEn: currentWord,
+			textFil: currentWord,
+			timestamp,
+			showLang: "En",
+		};
+		setTranslations((prev) => [...prev, translationObj]);
+		socket.current.emit("new-translation", translationObj);
+		setCurrentWord(""); // reset buffer
+	};
+
 	// Cleanup
 	useEffect(() => {
 		return () => {
@@ -327,13 +308,16 @@ export default function VideoCallPage() {
 		};
 	}, []);
 
-	// UI
+	// --- UI remains unchanged, just replace the Enter button handler with sendTranslation ---
+	// In the Live Translation panel:
+	// onClick={() => sendTranslation()}
+
 	return (
 		<div className="flex h-screen bg-gray-100 text-gray-900">
 			{/* Main video area */}
 			<main className="flex-1 flex flex-col items-center justify-center p-6 gap-6 mr-80">
+				{/* Videos & Controls */}
 				<div className="flex flex-col md:flex-row gap-6 w-full max-w-5xl items-center justify-center">
-					{/* Local Video */}
 					<div className="relative w-full md:w-1/2 max-w-md">
 						<video
 							ref={localVideoRef}
@@ -356,8 +340,6 @@ export default function VideoCallPage() {
 							)}
 						</div>
 					</div>
-
-					{/* Remote Video */}
 					<div className="relative w-full md:w-1/2 max-w-md">
 						<video
 							ref={remoteVideoRef}
@@ -410,41 +392,22 @@ export default function VideoCallPage() {
 						<h3 className="text-lg font-semibold text-gray-800">Live Translation</h3>
 						<div className="flex gap-2">
 							<button
-								onClick={() => {
-									if (liveTranslation.trim()) {
-										const timestamp = new Date().toLocaleTimeString([], {
-											hour: "2-digit",
-											minute: "2-digit",
-										});
-										setTranslations((prev) => [
-											...prev,
-											{
-												sender: "local",
-												textEn: liveTranslation,
-												textFil: liveTranslation,
-												timestamp,
-												showLang: "En",
-											},
-										]);
-										setLiveTranslation("");
-									}
-								}}
+								onClick={sendTranslation}
 								className="px-3 py-1 text-xs bg-green-500 text-white rounded-full"
 							>
 								Enter
 							</button>
 							<button
-								onClick={() => setLiveTranslation("")}
+								onClick={() => setCurrentWord("")}
 								className="px-3 py-1 text-xs bg-red-500 text-white rounded-full"
 							>
 								Clear
 							</button>
 						</div>
 					</div>
-
 					<div className="h-36 bg-gray-50 p-4 rounded-xl border border-gray-200 overflow-y-auto flex items-start">
-						{liveTranslation ? (
-							<p className="text-gray-800 leading-relaxed">{liveTranslation}</p>
+						{currentWord ? (
+							<p className="text-gray-800 leading-relaxed">{currentWord}</p>
 						) : (
 							<p className="text-gray-400 italic">Ongoing translation appears here...</p>
 						)}
@@ -463,7 +426,6 @@ export default function VideoCallPage() {
 							item.sender === "local"
 								? "self-end bg-blue-100 text-right"
 								: "self-start bg-green-100 text-left";
-
 						return (
 							<div key={i} className={`p-4 rounded-2xl shadow-sm max-w-[85%] ${alignment}`}>
 								<p className="font-medium text-gray-800 leading-snug">{textToShow}</p>
