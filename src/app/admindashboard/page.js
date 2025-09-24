@@ -107,9 +107,9 @@ const AdminDashboard = () => {
 
 	return (
 		<div className="min-h-screen flex bg-gradient-to-b from-gray-50 to-white dark:from-black dark:to-gray-900 font-sans">
-			{/* Sidebar */}
-			<aside className="w-64 bg-white/90 dark:bg-gray-900/80 shadow-md p-6 hidden md:flex flex-col">
-				<h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Admin</h2>
+			<aside className="w-64 bg-white/90 dark:bg-gray-900/80 shadow-md p-6 hidden md:flex flex-col fixed top-0 left-0 h-screen">
+				<h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Dashboard</h2>
+
 				<nav className="flex flex-col gap-3 flex-1">
 					{["overview", "users", "analytics", "feedback"].map((tab) => (
 						<button
@@ -125,13 +125,10 @@ const AdminDashboard = () => {
 						</button>
 					))}
 				</nav>
-				<button onClick={handleLogout} className="flex items-center gap-2 mt-6 text-red-500 hover:text-red-600">
-					<LogOut className="w-5 h-5" /> Logout
-				</button>
 			</aside>
 
 			{/* Main Content */}
-			<main className="flex-1 p-8">
+			<main className="flex-1 p-8 md:pl-70">
 				<header className="flex justify-between items-center mb-8">
 					<h1 className="text-3xl font-bold text-gray-900 dark:text-white">Welcome, {adminName}!</h1>
 					<button

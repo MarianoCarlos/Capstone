@@ -7,9 +7,13 @@ export default function Home() {
 			<header className="fixed top-0 left-0 w-full flex justify-between items-center px-8 py-4 bg-white/90 dark:bg-gray-900/80 backdrop-blur-md shadow-md z-50">
 				{/* Left: Logo + Brand */}
 				<div className="flex items-center gap-4">
-					<div className="w-12 h-12 bg-gray-900 dark:bg-gray-200 rounded-full flex items-center justify-center text-white dark:text-black font-bold shadow-md text-lg">
-						ASL
-					</div>
+					{/* Logo */}
+					<img
+						src="/logo.png" // put your logo file in the public/ folder, e.g. public/logo.png
+						alt="InSync Logo"
+						className="w-12 h-12 object-contain rounded-full shadow-md"
+					/>
+					{/* Brand Name */}
 					<span className="text-2xl font-bold text-gray-800 dark:text-white tracking-wide">InSync</span>
 				</div>
 

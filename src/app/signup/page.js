@@ -90,8 +90,8 @@ export default function SignupPage() {
 				</Link>
 
 				<div className="flex flex-col items-center mb-6 mt-6">
-					<img src="/favicon.ico" alt="App Logo" className="w-20 h-20 mb-3" />
-					<h1 className="text-3xl font-bold text-gray-900 dark:text-white">ASL Translator</h1>
+					<img src="/logo.png" alt="App Logo" className="w-20 h-20 mb-3" />
+					<h1 className="text-3xl font-bold text-gray-900 dark:text-white">InSync</h1>
 				</div>
 
 				<form onSubmit={handleSubmit} className="space-y-4">

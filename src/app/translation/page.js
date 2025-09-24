@@ -1,7 +1,17 @@
 "use client";
 import { useRef, useState, useEffect } from "react";
 import io from "socket.io-client";
-import { FaMicrophone, FaMicrophoneSlash, FaVideo, FaVideoSlash, FaPhone, FaCopy, FaVolumeUp } from "react-icons/fa";
+import Link from "next/link";
+import {
+	FaMicrophone,
+	FaMicrophoneSlash,
+	FaVideo,
+	FaVideoSlash,
+	FaPhone,
+	FaCopy,
+	FaVolumeUp,
+	FaArrowLeft,
+} from "react-icons/fa";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
 const ASL_BACKEND_URL = "https://backend-web-service-5f90.onrender.com/predict";
@@ -320,7 +330,14 @@ export default function VideoCallPage() {
 	// onClick={() => sendTranslation()}
 
 	return (
-		<div className="flex h-screen bg-gray-100 text-gray-900">
+		<div className="flex h-screen bg-gray-100 text-gray-900 relative">
+			{/* Back Button - Top Left */}
+			<Link
+				href="/userdashboard"
+				className="fixed top-4 left-4 p-3 bg-gray-800 text-white rounded-full shadow-md hover:bg-gray-900 transition z-50"
+			>
+				<FaArrowLeft className="text-lg" />
+			</Link>
 			{/* Main video area */}
 			<main className="flex-1 flex flex-col items-center justify-center p-6 gap-6 mr-80">
 				{/* Videos & Controls */}
