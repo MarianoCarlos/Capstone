@@ -100,7 +100,7 @@ const OverviewTab = () => {
 			{/* Left Column */}
 			<div className="lg:col-span-2 space-y-6">
 				{/* Recent Users */}
-				<div className="bg-white rounded-3xl shadow-lg border border-gray-200 overflow-hidden">
+				<div className=" rounded-3xl shadow-lg border border-gray-200 overflow-hidden">
 					<div className="px-6 py-4 border-b border-gray-100">
 						<h2 className="font-semibold text-xl text-gray-900">Recent Users</h2>
 					</div>
