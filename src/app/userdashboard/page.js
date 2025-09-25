@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { auth, db } from "../../utils/firebaseConfig";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, onSnapshot } from "firebase/firestore";
-import { Book, MessageSquare, User, LogOut, Camera, Play, Volume2, Eye, Home } from "lucide-react";
+import { Book, MessageSquare, User, LogOut, Camera, Home } from "lucide-react";
 
 export default function UserDashboard() {
 	const [userName, setUserName] = useState("");
@@ -14,13 +14,6 @@ export default function UserDashboard() {
 	const [activeUsers, setActiveUsers] = useState(0);
 
 	const pathname = usePathname();
-
-	const translationHistory = [
-		{ id: 1, text: '"Hello"', timeAgo: "2 mins ago", accuracy: "95%", language: "English" },
-		{ id: 2, text: '"Salamat"', timeAgo: "1 hour ago", accuracy: "92%", language: "Filipino" },
-		{ id: 3, text: '"Yes"', timeAgo: "1 day ago", accuracy: "98%", language: "English" },
-		{ id: 4, text: '"Hindi"', timeAgo: "3 days ago", accuracy: "90%", language: "Filipino" },
-	];
 
 	const navItems = [
 		{ href: "/userdashboard", label: "Home", icon: <Home className="w-5 h-5" /> },
@@ -37,9 +30,6 @@ export default function UserDashboard() {
 				? "bg-gray-900 text-white dark:bg-gray-200 dark:text-black shadow-md font-bold"
 				: "text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-800"
 		}`;
-
-	const averageAccuracy =
-		translationHistory.reduce((sum, t) => sum + parseInt(t.accuracy), 0) / translationHistory.length;
 
 	useEffect(() => {
 		let unsubscribeActiveUsers;
@@ -111,10 +101,10 @@ export default function UserDashboard() {
 				</nav>
 			</aside>
 
-			{/* Main Content (with left padding so it doesn't overlap the fixed sidebar) */}
+			{/* Main Content */}
 			<main className="flex-1 ml-64 p-8">
-				{/* Header (Not Sticky) */}
-				<header className="relative bg-gradient-to-b from-gray-50 to-white dark:from-black dark:to-gray-900 z-10 flex justify-between items-center mb-8 py-4">
+				{/* Header */}
+				<header className="relative z-10 flex justify-between items-center mb-8 py-4">
 					<h1 className="text-3xl font-bold text-gray-900 dark:text-white">Welcome, {userName}!</h1>
 					<button
 						onClick={handleLogout}
@@ -124,101 +114,118 @@ export default function UserDashboard() {
 					</button>
 				</header>
 
-				{/* Dashboard Cards */}
+				{/* Dashboard Cards (placeholders, no mock values) */}
 				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-					{[
-						{ title: "Total Translations", value: 23 },
-						{ title: "Today's Translations", value: 15 },
-						{ title: "Active Users", value: activeUsers },
-						{ title: "Accuracy Rate", value: `${averageAccuracy.toFixed(1)}%` },
-					].map((card, idx) => (
-						<div key={idx} className={cardBaseClass}>
-							<div>
-								<p className="text-sm text-gray-700 dark:text-gray-400">{card.title}</p>
-								<p className="text-2xl font-bold text-gray-900 dark:text-white">{card.value}</p>
-							</div>
-							<div className="w-12 h-12 bg-gray-900 dark:bg-gray-200 rounded-lg flex items-center justify-center">
-								<User className="w-6 h-6 text-white dark:text-black" />
-							</div>
-						</div>
-					))}
-				</div>
-
-				{/* Quick Actions */}
-				<div className="mb-10">
-					<h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Quick Actions</h3>
-					<div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-						{[
-							{
-								title: "Feedback",
-								href: "/feedback",
-								icon: <MessageSquare className="w-6 h-6 text-white" />,
-							},
-							{
-								title: "Gesture Library",
-								href: "/gesturelibrary",
-								icon: <Book className="w-6 h-6 text-white" />,
-							},
-							{
-								title: "Translation History",
-								href: "/translation-history",
-								icon: <User className="w-6 h-6 text-white" />,
-							},
-							{
-								title: "Translation Camera",
-								href: "/translation",
-								icon: <Camera className="w-6 h-6 text-white" />,
-							},
-						].map((action, idx) => (
-							<Link key={idx} href={action.href} className={cardBaseClass}>
+					{["Total Translations", "Today's Translations", "Active Users", "Accuracy Rate"].map(
+						(title, idx) => (
+							<div key={idx} className={cardBaseClass}>
 								<div>
-									<p className="text-sm text-gray-700 dark:text-gray-400">{action.title}</p>
+									<p className="text-sm text-gray-700 dark:text-gray-400">{title}</p>
+									<p className="text-2xl font-bold text-gray-900 dark:text-white">--</p>
 								</div>
 								<div className="w-12 h-12 bg-gray-900 dark:bg-gray-200 rounded-lg flex items-center justify-center">
-									{action.icon}
+									<User className="w-6 h-6 text-white dark:text-black" />
 								</div>
-							</Link>
-						))}
+							</div>
+						)
+					)}
+				</div>
+
+				{/* Sidebar Explanations (Navigation Guide) */}
+				<div className="mb-10">
+					<div className="mb-6">
+						<h3 className="text-xl font-bold tracking-wide text-gray-900 dark:text-white">
+							Navigation Guide
+						</h3>
+						<p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
+							Get familiar with each section of the dashboard so you know exactly where to go.
+						</p>
+					</div>
+
+					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+						{/* Home */}
+						<Link
+							href="/userdashboard"
+							className="block p-6 bg-white/90 dark:bg-gray-900/80 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-md hover:shadow-lg hover:translate-y-1 transition"
+						>
+							<h4 className="font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+								<Home className="w-5 h-5 text-gray-700 dark:text-gray-300" /> Home
+							</h4>
+							<p className="text-base text-gray-700 dark:text-gray-400 leading-relaxed">
+								View an overview of your <span className="font-medium">activity</span>, translation{" "}
+								<span className="font-medium">stats</span>, and recent{" "}
+								<span className="font-medium">performance</span>.
+							</p>
+						</Link>
+
+						{/* Translation */}
+						<Link
+							href="/translation"
+							className="block p-6 bg-white/90 dark:bg-gray-900/80 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-md hover:shadow-lg hover:translate-y-1 transition"
+						>
+							<h4 className="font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+								<Camera className="w-5 h-5 text-gray-700 dark:text-gray-300" /> Translation
+							</h4>
+							<p className="text-base text-gray-700 dark:text-gray-400 leading-relaxed">
+								Open the live camera to translate <span className="font-medium">ASL gestures</span> into
+								text instantly.
+							</p>
+						</Link>
+
+						{/* Gesture Library */}
+						<Link
+							href="/gesturelibrary"
+							className="block p-6 bg-white/90 dark:bg-gray-900/80 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-md hover:shadow-lg hover:translate-y-1 transition"
+						>
+							<h4 className="font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+								<Book className="w-5 h-5 text-gray-700 dark:text-gray-300" /> Gesture Library
+							</h4>
+							<p className="text-base text-gray-700 dark:text-gray-400 leading-relaxed">
+								Browse and learn <span className="font-medium">ASL gestures</span> with explanations and
+								practice examples.
+							</p>
+						</Link>
+
+						{/* Feedback */}
+						<Link
+							href="/feedback"
+							className="block p-6 bg-white/90 dark:bg-gray-900/80 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-md hover:shadow-lg hover:translate-y-1 transition"
+						>
+							<h4 className="font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+								<MessageSquare className="w-5 h-5 text-gray-700 dark:text-gray-300" /> Feedback
+							</h4>
+							<p className="text-base text-gray-700 dark:text-gray-400 leading-relaxed">
+								Share your <span className="font-medium">feedback</span> or report issues to help us
+								improve.
+							</p>
+						</Link>
+
+						{/* Profile */}
+						<Link
+							href="/profile"
+							className="block p-6 bg-white/90 dark:bg-gray-900/80 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-md hover:shadow-lg hover:translate-y-1 transition lg:col-span-2"
+						>
+							<h4 className="font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+								<User className="w-5 h-5 text-gray-700 dark:text-gray-300" /> Profile
+							</h4>
+							<p className="text-base text-gray-700 dark:text-gray-400 leading-relaxed">
+								Manage your <span className="font-medium">account settings</span>, preferences, and
+								personal <span className="font-medium">information</span>.
+							</p>
+						</Link>
 					</div>
 				</div>
 
-				{/* Translation History */}
+				{/* Translation History (no mock items, empty placeholder) */}
 				<div className="bg-white/90 dark:bg-gray-900/80 shadow-md rounded-3xl p-6">
 					<h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Recent Translations</h3>
 					<p className="text-sm text-gray-700 dark:text-gray-400 mb-4">Your latest ASL to text conversions</p>
+
 					<div className="space-y-4">
-						{translationHistory.map((t) => (
-							<div
-								key={t.id}
-								className="flex items-center justify-between p-4 bg-white/80 dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700"
-							>
-								<div className="flex-1">
-									<p className="font-medium text-gray-900 dark:text-white">{t.text}</p>
-									<div className="flex items-center space-x-4 mt-1">
-										<span className="text-sm text-gray-700 dark:text-gray-400">{t.timeAgo}</span>
-										<span className="px-2 py-0.5 border rounded text-xs text-gray-900 dark:text-gray-200">
-											{t.language}
-										</span>
-										<span className="text-sm text-green-600 dark:text-green-400">
-											{t.accuracy} accuracy
-										</span>
-									</div>
-								</div>
-								<div className="flex items-center space-x-2">
-									<button className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded">
-										<Play className="w-4 h-4" />
-									</button>
-									<button className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded">
-										<Volume2 className="w-4 h-4" />
-									</button>
-									<button className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded">
-										<Eye className="w-4 h-4" />
-									</button>
-								</div>
-							</div>
-						))}
+						<p className="text-sm text-gray-500 dark:text-gray-400 italic">No recent translations yet.</p>
 					</div>
-					<button className="w-full mt-4 border-2 border-white/60 rounded-3xl py-2 text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 font-sans">
+
+					<button className="w-full mt-6 border-2 border-gray-200 dark:border-gray-700 rounded-2xl py-2 text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition font-medium">
 						View All History
 					</button>
 				</div>

@@ -141,28 +141,22 @@ const AdminDashboard = () => {
 
 				{/* Stats Section */}
 				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-10">
-					<StatCard title="Total Users" value={systemStats.totalUsers} growth="+12% this month" />
-					<StatCard title="Active Users" value={systemStats.activeUsers} growth="+8% today" />
-					<StatCard
-						title="Daily Translations"
-						value={systemStats.dailyTranslations}
-						growth="+15% vs yesterday"
-					/>
+					<StatCard title="Total Users" value={systemStats.totalUsers} />
+					<StatCard title="Active Users" value={systemStats.activeUsers} />
+					<StatCard title="Daily Translations" value={systemStats.dailyTranslations} />
 				</div>
 
 				{/* Tab Content */}
-				<div className="bg-white/90 dark:bg-gray-900/80 shadow-md rounded-3xl p-6 border border-gray-200 dark:border-gray-700">
-					{activeTab === "overview" && (
-						<OverviewTab
-							recentUsers={recentUsers}
-							recentFeedback={recentFeedback}
-							feedbackStats={feedbackStats}
-						/>
-					)}
-					{activeTab === "users" && <UsersTab recentUsers={recentUsers} />}
-					{activeTab === "analytics" && <AnalyticsTab />}
-					{activeTab === "feedback" && <FeedbackTab recentFeedback={recentFeedback} />}
-				</div>
+				{activeTab === "overview" && (
+					<OverviewTab
+						recentUsers={recentUsers}
+						recentFeedback={recentFeedback}
+						feedbackStats={feedbackStats}
+					/>
+				)}
+				{activeTab === "users" && <UsersTab recentUsers={recentUsers} />}
+				{activeTab === "analytics" && <AnalyticsTab />}
+				{activeTab === "feedback" && <FeedbackTab recentFeedback={recentFeedback} />}
 			</main>
 		</div>
 	);

@@ -121,7 +121,7 @@ const UsersTab = () => {
 	);
 
 	return (
-		<div className="min-h-screen p-6 font-sans">
+		<div className="bg-white rounded-3xl shadow-lg border border-gray-200 overflow-hidden p-6 font-sans">
 			{/* Header */}
 			<div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
 				<h2 className="font-semibold text-gray-800 text-lg">User Management</h2>
@@ -131,7 +131,7 @@ const UsersTab = () => {
 						placeholder="Search users..."
 						value={search}
 						onChange={(e) => setSearch(e.target.value)}
-						className="flex-1 border rounded-lg px-3 py-2 text-sm"
+						className="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
 					/>
 					<button onClick={() => openModal()} className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm">
 						Create User
@@ -153,7 +153,7 @@ const UsersTab = () => {
 									placeholder="First Name"
 									value={newUser.firstName}
 									onChange={(e) => setNewUser({ ...newUser, firstName: e.target.value })}
-									className="w-full h-11 px-3 border rounded-lg"
+									className="w-full h-11 px-3 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
 									required
 								/>
 								<input
@@ -161,7 +161,7 @@ const UsersTab = () => {
 									placeholder="Last Name"
 									value={newUser.lastName}
 									onChange={(e) => setNewUser({ ...newUser, lastName: e.target.value })}
-									className="w-full h-11 px-3 border rounded-lg"
+									className="w-full h-11 px-3 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
 									required
 								/>
 							</div>
@@ -171,7 +171,7 @@ const UsersTab = () => {
 								placeholder="Email"
 								value={newUser.email}
 								onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
-								className="w-full h-11 px-3 border rounded-lg"
+								className="w-full h-11 px-3 border rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
 								required
 								disabled={!!editId}
 							/>
@@ -179,7 +179,7 @@ const UsersTab = () => {
 							<select
 								value={newUser.userType}
 								onChange={(e) => setNewUser({ ...newUser, userType: e.target.value })}
-								className="w-full h-11 px-3 border rounded-lg"
+								className="w-full h-11 px-3 border rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
 							>
 								<option value="DHH">DHH</option>
 								<option value="Hearing">Hearing</option>
@@ -193,7 +193,7 @@ const UsersTab = () => {
 											placeholder="Password"
 											value={newUser.password}
 											onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-											className="w-full h-11 px-3 border rounded-lg pr-10"
+											className="w-full h-11 px-3 border rounded-lg pr-10 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
 											required
 										/>
 										<button
@@ -213,7 +213,7 @@ const UsersTab = () => {
 											onChange={(e) =>
 												setNewUser({ ...newUser, confirmPassword: e.target.value })
 											}
-											className="w-full h-11 px-3 border rounded-lg pr-10"
+											className="w-full h-11 px-3 border rounded-lg pr-10 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
 											required
 										/>
 										<button

@@ -3,9 +3,10 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import toast from "react-hot-toast";
 import { auth, db } from "../../utils/firebaseConfig";
-import { updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { updatePassword, reauthenticateWithCredential, EmailAuthProvider, deleteUser } from "firebase/auth";
+import { doc, getDoc, updateDoc, deleteDoc } from "firebase/firestore";
 import { Book, MessageSquare, User, Camera, Home, Eye, EyeOff } from "lucide-react";
 
 export default function ProfilePage() {
@@ -38,6 +39,7 @@ export default function ProfilePage() {
 				: "text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-800"
 		}`;
 
+	// Fetch user info
 	useEffect(() => {
 		const fetchUserData = async () => {
 			const user = auth.currentUser;
@@ -49,7 +51,7 @@ export default function ProfilePage() {
 				setUserInfo({
 					firstName: data.firstName || "",
 					lastName: data.lastName || "",
-					email: data.email || "",
+					email: user.email || data.email || "",
 					age: data.age || "",
 					userType: data.userType || "Dhh",
 				});
@@ -60,6 +62,7 @@ export default function ProfilePage() {
 
 	const handleChange = (e) => setUserInfo({ ...userInfo, [e.target.name]: e.target.value });
 
+	// Save profile
 	const handleSave = async () => {
 		try {
 			const user = auth.currentUser;
@@ -68,43 +71,106 @@ export default function ProfilePage() {
 			await updateDoc(userRef, {
 				firstName: userInfo.firstName,
 				lastName: userInfo.lastName,
-				email: userInfo.email,
+				email: user.email, // Always sync with Firebase Auth
 				age: userInfo.age,
 				userType: userInfo.userType,
 				updatedAt: new Date(),
 			});
 			setIsEditing(false);
 			setShowPasswordForm(false);
-			alert("Profile updated successfully!");
+			toast.success("✅ Profile updated successfully!");
 		} catch (error) {
 			console.error(error);
-			alert("Failed to update profile.");
+			toast.error("❌ Failed to update profile.");
 		}
 	};
 
 	const handleChangePassword = async () => {
 		const user = auth.currentUser;
 		if (!user) return;
-		if (passwords.new !== passwords.confirm) {
-			alert("Passwords do not match!");
+
+		// 1. Check if fields are filled
+		if (!passwords.current || !passwords.new || !passwords.confirm) {
+			toast.error("⚠️ Please fill in all password fields.");
 			return;
 		}
+
+		// 2. New vs Confirm check
+		if (passwords.new !== passwords.confirm) {
+			toast.error("⚠️ Passwords do not match!");
+			return;
+		}
+
 		try {
+			// 3. Reauthenticate with current password
 			const credential = EmailAuthProvider.credential(user.email, passwords.current);
 			await reauthenticateWithCredential(user, credential);
+
+			// 4. Update password
 			await updatePassword(user, passwords.new);
-			alert("Password changed successfully!");
+			toast.success("🔑 Password changed successfully!");
+
+			// 5. Reset form
 			setPasswords({ current: "", new: "", confirm: "" });
 			setShowPasswordForm(false);
 		} catch (error) {
 			console.error(error);
-			alert("Failed to change password. Make sure your current password is correct.");
+
+			if (error.code === "auth/invalid-credential") {
+				toast.error("❌ Incorrect current password. Please try again.");
+			} else if (error.code === "auth/missing-password") {
+				toast.error("⚠️ Please enter your current password.");
+			} else {
+				toast.error("❌ Failed to change password. Try logging out and back in.");
+			}
 		}
+	};
+
+	// Delete account
+	const handleDeleteAccount = async () => {
+		const user = auth.currentUser;
+		if (!user) return;
+
+		toast(
+			(t) => (
+				<div className="p-3">
+					<p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Delete your account?</p>
+					<p className="text-xs text-gray-600 dark:text-gray-400 mb-3">This action cannot be undone.</p>
+					<div className="flex gap-2">
+						<button
+							onClick={async () => {
+								toast.dismiss(t.id);
+								try {
+									const userRef = doc(db, "users", user.uid);
+									await deleteDoc(userRef);
+									await deleteUser(user);
+									toast.success("🗑️ Your account has been deleted.");
+									window.location.href = "/";
+								} catch (error) {
+									console.error("Error deleting account:", error);
+									toast.error("❌ Failed to delete account. Please log in again.");
+								}
+							}}
+							className="px-3 py-1 bg-red-600 text-white text-sm rounded-md hover:bg-red-700"
+						>
+							Delete
+						</button>
+						<button
+							onClick={() => toast.dismiss(t.id)}
+							className="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded-md hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+						>
+							Cancel
+						</button>
+					</div>
+				</div>
+			),
+			{ duration: 60000 }
+		);
 	};
 
 	return (
 		<div className="min-h-screen flex bg-gradient-to-b from-gray-50 to-white dark:from-black dark:to-gray-900 font-sans">
-			{/* Sidebar (Fixed) */}
+			{/* Sidebar */}
 			<aside className="fixed top-0 left-0 h-full w-64 bg-white/90 dark:bg-gray-900/80 shadow-md p-6 hidden md:flex flex-col">
 				<h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Dashboard</h2>
 				<nav className="flex flex-col gap-3 flex-1">
@@ -133,7 +199,7 @@ export default function ProfilePage() {
 							{/* Avatar */}
 							<div className="flex flex-col items-center">
 								<div className="w-32 h-32 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center text-gray-500 dark:text-gray-300 text-4xl font-bold">
-									{userInfo.firstName.charAt(0)}
+									{userInfo.firstName ? userInfo.firstName.charAt(0) : "U"}
 								</div>
 								<p className="mt-2 text-gray-700 dark:text-gray-300 text-center font-semibold">
 									{userInfo.firstName} {userInfo.lastName}
@@ -190,13 +256,20 @@ export default function ProfilePage() {
 											else setIsEditing(true);
 											setShowPasswordForm(true);
 										}}
-										className={`flex items-center gap-2 px-4 py-2 rounded-lg transition font-medium ${
-											pathname === "/profile" || isEditing
-												? "bg-gray-900 text-white dark:bg-gray-200 dark:text-black shadow-md font-bold"
-												: "text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-800"
+										className={`px-4 py-2 rounded-lg font-medium transition shadow-md ${
+											isEditing
+												? "bg-green-600 text-white hover:bg-green-700"
+												: "bg-gray-900 text-white dark:bg-gray-200 dark:text-black hover:opacity-90"
 										}`}
 									>
 										{isEditing ? "Save Changes" : "Edit Profile"}
+									</button>
+
+									<button
+										onClick={handleDeleteAccount}
+										className="px-4 py-2 rounded-lg bg-red-600 text-white font-medium hover:bg-red-700 transition shadow-md"
+									>
+										Delete Account
 									</button>
 								</div>
 

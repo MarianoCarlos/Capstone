@@ -332,11 +332,10 @@ export default function VideoCallPage() {
 	return (
 		<div className="flex h-screen bg-gray-100 text-gray-900 relative">
 			{/* Back Button - Top Left */}
-			<Link
-				href="/userdashboard"
-				className="fixed top-4 left-4 p-3 bg-gray-800 text-white rounded-full shadow-md hover:bg-gray-900 transition z-50"
-			>
-				<FaArrowLeft className="text-lg" />
+			<Link href="/userdashboard">
+				<div className="fixed top-4 left-4 p-3 bg-gray-800 text-white rounded-full shadow-md hover:bg-gray-900 transition z-50">
+					<FaArrowLeft className="text-lg" />
+				</div>
 			</Link>
 			{/* Main video area */}
 			<main className="flex-1 flex flex-col items-center justify-center p-6 gap-6 mr-80">
