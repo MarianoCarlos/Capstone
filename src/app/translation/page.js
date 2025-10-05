@@ -13,6 +13,10 @@ import {
 	FaArrowLeft,
 } from "react-icons/fa";
 
+import { db } from "@/utils/firebaseConfig";
+import { getAuth } from "firebase/auth";
+import { collection, addDoc, doc, getDoc } from "firebase/firestore";
+
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
 const ASL_BACKEND_URL = "https://words-backend-hosting.onrender.com/predict";
 
@@ -32,24 +36,23 @@ export default function VideoCallPage() {
 	const [currentWord, setCurrentWord] = useState("");
 	const [manualMessage, setManualMessage] = useState("");
 
-	// ✅ invite system
+	const [localName, setLocalName] = useState("You");
+	const [remoteName, setRemoteName] = useState("Remote");
+	const [localType, setLocalType] = useState(""); // "DHH" or "HEARING"
+
 	const [inviteCode, setInviteCode] = useState("");
 	const [isRoomJoined, setIsRoomJoined] = useState(false);
 
-	// Flush queued ICE candidates
 	const flushIceQueueTo = (id) => {
 		if (!socket.current || !id) return;
 		iceQueue.current.forEach((candidate) => socket.current.emit("ice-candidate", { candidate, to: id }));
 		iceQueue.current = [];
 	};
 
-	// Initialize socket + peer connection
 	const initializeCall = async () => {
 		socket.current = io(SOCKET_SERVER_URL);
-
 		socket.current.on("connect", () => console.log("✅ Connected:", socket.current.id));
 		socket.current.on("connect_error", (err) => console.warn("Socket error:", err));
-
 		socket.current.on("new-translation", (data) => {
 			setTranslations((prev) => [...prev, data]);
 		});
@@ -97,10 +100,7 @@ export default function VideoCallPage() {
 			if (event?.candidate) {
 				const target = remoteIdRef.current;
 				if (target && socket.current) {
-					socket.current.emit("ice-candidate", {
-						candidate: event.candidate,
-						to: target,
-					});
+					socket.current.emit("ice-candidate", { candidate: event.candidate, to: target });
 				} else {
 					iceQueue.current.push(event.candidate);
 				}
@@ -175,15 +175,12 @@ export default function VideoCallPage() {
 		}
 	};
 
-	// Start camera + mic
 	const startVideo = async () => {
 		try {
 			const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 			if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-
 			const _pc = pc.current;
 			if (!_pc) return;
-
 			stream.getTracks().forEach((track) => _pc.addTrack(track, stream));
 		} catch (err) {
 			console.error(err);
@@ -191,15 +188,47 @@ export default function VideoCallPage() {
 		}
 	};
 
-	// Start / End call
 	const handleCallToggle = async () => {
+		const auth = getAuth();
+		const user = auth.currentUser;
+
+		if (!user) {
+			alert("You must be logged in to start a call.");
+			return;
+		}
+
 		if (!callActive) {
 			if (!inviteCode.trim()) {
 				alert("Enter or generate an invite code first!");
 				return;
 			}
+
 			await initializeCall();
 			await startVideo();
+
+			try {
+				const localRef = doc(db, "users", user.uid);
+				const localSnap = await getDoc(localRef);
+
+				if (localSnap.exists()) {
+					const data = localSnap.data();
+					setLocalName(data.name || "You");
+					setLocalType(data.userType ? data.userType.toUpperCase() : "HEARING");
+					console.log(`✅ User loaded: ${data.name} (${data.userType || "HEARING"})`);
+				} else {
+					console.warn("⚠️ No Firestore user doc found for UID:", user.uid);
+					setLocalType("HEARING");
+				}
+
+				if (remoteIdRef.current) {
+					const remoteRef = doc(db, "users", remoteIdRef.current);
+					const remoteSnap = await getDoc(remoteRef);
+					if (remoteSnap.exists()) setRemoteName(remoteSnap.data().name || "Remote");
+				}
+			} catch (err) {
+				console.error("Error fetching user names:", err);
+			}
+
 			setCallActive(true);
 		} else {
 			localVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
@@ -211,19 +240,18 @@ export default function VideoCallPage() {
 		}
 	};
 
-	// Mute/Camera
 	const toggleMute = () => {
 		const newMuted = !isMuted;
 		localVideoRef.current?.srcObject?.getAudioTracks().forEach((t) => (t.enabled = !newMuted));
 		setIsMuted(newMuted);
 	};
+
 	const toggleCamera = () => {
 		const newCam = !cameraOn;
 		localVideoRef.current?.srcObject?.getVideoTracks().forEach((t) => (t.enabled = newCam));
 		setCameraOn(newCam);
 	};
 
-	// Speech + Clipboard
 	const copyText = (text) => navigator.clipboard.writeText(text);
 	const speakText = (text) => {
 		speechSynthesis.cancel();
@@ -232,9 +260,8 @@ export default function VideoCallPage() {
 		speechSynthesis.speak(u);
 	};
 
-	// === Frame Capture & Prediction ===
 	useEffect(() => {
-		if (!callActive) return;
+		if (!callActive || localType !== "DHH") return;
 		const interval = setInterval(async () => {
 			if (!localVideoRef.current || localVideoRef.current.readyState !== 4) return;
 			const canvas = document.createElement("canvas");
@@ -242,17 +269,14 @@ export default function VideoCallPage() {
 			canvas.height = 224;
 			const ctx = canvas.getContext("2d");
 			ctx.drawImage(localVideoRef.current, 0, 0, 224, 224);
-
 			canvas.toBlob(async (blob) => {
 				if (!blob) return;
 				const formData = new FormData();
 				formData.append("file", blob, "frame.jpg");
-
 				try {
 					const res = await fetch(ASL_BACKEND_URL, { method: "POST", body: formData });
 					const data = await res.json();
 					if (!data?.prediction) return;
-
 					setCurrentWord((prev) => {
 						if (prev.slice(-1) === data.prediction) return prev;
 						return prev + data.prediction;
@@ -263,26 +287,38 @@ export default function VideoCallPage() {
 			}, "image/jpeg");
 		}, 1000);
 		return () => clearInterval(interval);
-	}, [callActive]);
+	}, [callActive, localType]);
 
-	// Send live translation
-	const sendTranslation = () => {
+	const sendTranslation = async () => {
+		if (localType !== "DHH") return alert("Hearing users cannot use gesture translation.");
 		if (!currentWord.trim() || !socket.current) return;
 		const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-		const obj = { sender: "local", text: currentWord, timestamp };
+		const obj = { sender: localName, text: currentWord, timestamp };
 		setTranslations((p) => [...p, obj]);
 		socket.current.emit("new-translation", obj);
 		setCurrentWord("");
+		await addDoc(collection(db, "translations"), {
+			room: inviteCode,
+			sender: localName,
+			text: currentWord,
+			timestamp: new Date().toISOString(),
+		});
 	};
 
-	// ✅ Send manual chat message
-	const sendChatMessage = () => {
+	const sendChatMessage = async () => {
+		if (localType === "DHH") return alert("DHH users cannot send typed messages.");
 		if (!manualMessage.trim() || !socket.current) return;
 		const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-		const obj = { sender: "local", text: manualMessage, timestamp };
+		const obj = { sender: localName, text: manualMessage, timestamp };
 		setTranslations((p) => [...p, obj]);
 		socket.current.emit("new-translation", obj);
 		setManualMessage("");
+		await addDoc(collection(db, "translations"), {
+			room: inviteCode,
+			sender: localName,
+			text: manualMessage,
+			timestamp: new Date().toISOString(),
+		});
 	};
 
 	useEffect(() => {
@@ -291,8 +327,7 @@ export default function VideoCallPage() {
 			socket.current?.disconnect();
 		};
 	}, []);
-
-	// --- UI unchanged, only added chat input below ---
+	// --- UI (UNCHANGED) ---
 	return (
 		<div className="flex h-screen bg-gray-100 text-gray-900 relative">
 			{/* Left Sidebar */}
@@ -343,7 +378,7 @@ export default function VideoCallPage() {
 				</div>
 			</div>
 
-			{/* Main content */}
+			{/* Main */}
 			<main className="flex-1 flex flex-col items-center justify-center p-6 gap-6 ml-80 mr-80">
 				{/* Videos */}
 				<div className="flex flex-col md:flex-row gap-6 w-full max-w-5xl items-center justify-center">
@@ -357,7 +392,8 @@ export default function VideoCallPage() {
 							className="w-full aspect-video bg-black rounded-xl shadow-lg object-cover"
 						/>
 						<div className="absolute top-2 left-2 bg-black/50 text-white px-2 py-1 rounded flex items-center gap-2 text-sm">
-							<span>You</span>
+							{/* ✅ Firebase name instead of static “You” */}
+							<span>{localName}</span>
 							{isMuted ? (
 								<FaMicrophoneSlash className="text-red-500" />
 							) : (
@@ -380,7 +416,8 @@ export default function VideoCallPage() {
 							className="w-full aspect-video bg-black rounded-xl shadow-lg object-cover"
 						/>
 						<div className="absolute top-2 left-2 bg-black/50 text-white px-2 py-1 rounded flex items-center gap-2 text-sm">
-							<span>Remote</span>
+							{/* ✅ Firebase name instead of static “Remote” */}
+							<span>{remoteName}</span>
 							<FaMicrophone className="text-green-500" />
 							<FaVideo className="text-green-500" />
 						</div>
@@ -417,14 +454,19 @@ export default function VideoCallPage() {
 					</button>
 				</div>
 
-				{/* Live Translation + Chat */}
+				{/* Live Translation */}
 				<div className="w-full max-w-4xl bg-white rounded-2xl shadow-lg p-5 flex flex-col mt-4">
 					<div className="flex justify-between items-center mb-3">
 						<h3 className="text-lg font-semibold text-gray-800">Live Translation</h3>
 						<div className="flex gap-2">
 							<button
 								onClick={sendTranslation}
-								className="px-3 py-1 text-xs bg-green-500 text-white rounded-full"
+								className={`px-3 py-1 text-xs rounded-full text-white ${
+									localType === "DHH"
+										? "bg-green-500 hover:bg-green-600"
+										: "bg-gray-400 cursor-not-allowed"
+								}`}
+								disabled={localType !== "DHH"}
 							>
 								Enter
 							</button>
@@ -445,7 +487,7 @@ export default function VideoCallPage() {
 						)}
 					</div>
 
-					{/* ✅ Chat input */}
+					{/* Chat input */}
 					<div className="flex items-center gap-3 mt-4">
 						<input
 							type="text"
@@ -453,11 +495,17 @@ export default function VideoCallPage() {
 							onChange={(e) => setManualMessage(e.target.value)}
 							onKeyDown={(e) => e.key === "Enter" && sendChatMessage()}
 							placeholder="Type a message..."
-							className="flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+							className={`flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 ${
+								localType === "DHH" ? "bg-gray-200 cursor-not-allowed" : ""
+							}`}
+							disabled={localType === "DHH"}
 						/>
 						<button
 							onClick={sendChatMessage}
-							className="px-4 py-2 bg-blue-500 text-white rounded-full text-sm shadow hover:bg-blue-600"
+							className={`px-4 py-2 text-white rounded-full text-sm shadow ${
+								localType === "DHH" ? "bg-gray-400 cursor-not-allowed" : "bg-blue-500 hover:bg-blue-600"
+							}`}
+							disabled={localType === "DHH"}
 						>
 							Send
 						</button>
@@ -465,17 +513,18 @@ export default function VideoCallPage() {
 				</div>
 			</main>
 
-			{/* Right Sidebar */}
 			<aside className="fixed top-0 right-0 h-full w-80 bg-white/95 shadow-xl p-6 overflow-y-auto border-l border-gray-200 flex flex-col">
 				<h2 className="text-2xl font-bold mb-6 text-gray-900">Translation History</h2>
 				<div className="flex flex-col gap-4">
 					{translations.map((item, i) => {
 						const align =
-							item.sender === "local"
+							item.sender === localName
 								? "self-end bg-blue-100 text-right"
 								: "self-start bg-green-100 text-left";
 						return (
 							<div key={i} className={`p-4 rounded-2xl shadow-sm max-w-[85%] ${align}`}>
+								{/* ✅ sender name shown above the message */}
+								<p className="text-xs text-gray-600 mb-1 font-semibold">{item.sender}</p>
 								<p className="font-medium text-gray-800">{item.text}</p>
 								<div className="flex justify-between items-center mt-2 text-xs text-gray-500">
 									<span>{item.timestamp}</span>
