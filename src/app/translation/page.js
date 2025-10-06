@@ -78,14 +78,26 @@ export default function VideoCallPage() {
 
 		pc.current = new RTCPeerConnection({
 			iceServers: [
-				{ urls: "stun:stun.relay.metered.ca:80" },
+				{
+					urls: "stun:stun.relay.metered.ca:80",
+				},
 				{
 					urls: "turn:global.relay.metered.ca:80",
 					username: "d32a9a3a2410a9814d92f496",
 					credential: "1pHpTSjADEGTm86/",
 				},
 				{
+					urls: "turn:global.relay.metered.ca:80?transport=tcp",
+					username: "d32a9a3a2410a9814d92f496",
+					credential: "1pHpTSjADEGTm86/",
+				},
+				{
 					urls: "turn:global.relay.metered.ca:443",
+					username: "d32a9a3a2410a9814d92f496",
+					credential: "1pHpTSjADEGTm86/",
+				},
+				{
+					urls: "turns:global.relay.metered.ca:443?transport=tcp",
 					username: "d32a9a3a2410a9814d92f496",
 					credential: "1pHpTSjADEGTm86/",
 				},
