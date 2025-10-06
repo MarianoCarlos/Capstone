@@ -39,7 +39,6 @@ export default function VideoCallPage() {
 	const [localName, setLocalName] = useState("You");
 	const [remoteName, setRemoteName] = useState("Remote");
 	const [localType, setLocalType] = useState(""); // "DHH" or "HEARING"
-
 	const [inviteCode, setInviteCode] = useState("");
 	const [isRoomJoined, setIsRoomJoined] = useState(false);
 
@@ -49,10 +48,30 @@ export default function VideoCallPage() {
 		iceQueue.current = [];
 	};
 
-	const initializeCall = async () => {
+	// --- INITIALIZE CALL ---
+	const initializeCall = async (userUID, userName) => {
 		socket.current = io(SOCKET_SERVER_URL);
-		socket.current.on("connect", () => console.log("✅ Connected:", socket.current.id));
+
+		socket.current.on("connect", () => {
+			console.log("✅ Connected:", socket.current.id);
+			// Send local user UID & name to room so others can fetch Firebase info
+			socket.current.emit("register-user", {
+				room: inviteCode.trim(),
+				uid: userUID,
+				name: userName,
+			});
+		});
+
 		socket.current.on("connect_error", (err) => console.warn("Socket error:", err));
+
+		// 🔹 Receive remote user's Firebase info
+		socket.current.on("user-info", async ({ uid, name }) => {
+			console.log("🟣 Remote user info received:", uid, name);
+			setRemoteName(name || "Remote");
+			remoteIdRef.current = uid;
+			setRemoteId(uid);
+		});
+
 		socket.current.on("new-translation", (data) => {
 			setTranslations((prev) => [...prev, data]);
 		});
@@ -107,29 +126,11 @@ export default function VideoCallPage() {
 			}
 		};
 
-		socket.current.on("new-user", async (id) => {
-			setRemoteId(id);
-			remoteIdRef.current = id;
-			flushIceQueueTo(id);
-
-			if (localVideoRef.current?.srcObject) {
-				try {
-					const _pc = getPc();
-					if (!_pc) return;
-					const offer = await _pc.createOffer();
-					await _pc.setLocalDescription(offer);
-					socket.current.emit("offer", { sdp: offer, to: id });
-				} catch (err) {
-					console.error(err);
-				}
-			}
-		});
-
 		socket.current.on("offer", async (data) => {
 			const fromId = data.from || data.sender || data.fromId;
 			if (!fromId) return;
-			setRemoteId(fromId);
 			remoteIdRef.current = fromId;
+			setRemoteId(fromId);
 			try {
 				const _pc = getPc();
 				if (!_pc) return;
@@ -166,6 +167,7 @@ export default function VideoCallPage() {
 			}
 		});
 
+		// 🔹 Join Room and Notify
 		if (inviteCode.trim()) {
 			socket.current.emit("join-room", inviteCode.trim());
 			setIsRoomJoined(true);
@@ -203,32 +205,22 @@ export default function VideoCallPage() {
 				return;
 			}
 
-			await initializeCall();
-			await startVideo();
+			const localRef = doc(db, "users", user.uid);
+			const localSnap = await getDoc(localRef);
+			let userName = "You";
+			let userType = "HEARING";
 
-			try {
-				const localRef = doc(db, "users", user.uid);
-				const localSnap = await getDoc(localRef);
-
-				if (localSnap.exists()) {
-					const data = localSnap.data();
-					setLocalName(data.name || "You");
-					setLocalType(data.userType ? data.userType.toUpperCase() : "HEARING");
-					console.log(`✅ User loaded: ${data.name} (${data.userType || "HEARING"})`);
-				} else {
-					console.warn("⚠️ No Firestore user doc found for UID:", user.uid);
-					setLocalType("HEARING");
-				}
-
-				if (remoteIdRef.current) {
-					const remoteRef = doc(db, "users", remoteIdRef.current);
-					const remoteSnap = await getDoc(remoteRef);
-					if (remoteSnap.exists()) setRemoteName(remoteSnap.data().name || "Remote");
-				}
-			} catch (err) {
-				console.error("Error fetching user names:", err);
+			if (localSnap.exists()) {
+				const data = localSnap.data();
+				userName = data.name || "You";
+				userType = data.userType ? data.userType.toUpperCase() : "HEARING";
+				setLocalName(userName);
+				setLocalType(userType);
+				console.log(`✅ Local User: ${userName} (${userType})`);
 			}
 
+			await initializeCall(user.uid, userName);
+			await startVideo();
 			setCallActive(true);
 		} else {
 			localVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
