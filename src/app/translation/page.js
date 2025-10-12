@@ -241,6 +241,9 @@ export default function VideoCallPage() {
 			socket.current?.disconnect();
 			setCallActive(false);
 			setIsRoomJoined(false);
+
+			setTranslations([]); // 🧹 clear translation history
+			window.dispatchEvent(new Event("clear-translation")); // 🧹 reset internal vars too
 		}
 	};
 
@@ -266,31 +269,79 @@ export default function VideoCallPage() {
 
 	useEffect(() => {
 		if (!callActive || localType !== "DHH") return;
+
+		// 🧠 Internal tracking variables
+		let currentPreview = ""; // word being detected in real-time
+		let confirmedText = ""; // finalized words (sentence)
+		let lastPrediction = ""; // last backend response
+		let noHandCount = 0; // how long no hand is visible
+
+		// 🧹 Reset internal variables when Clear button is pressed
+		const handleClear = () => {
+			console.log("🧹 Resetting translation state...");
+			currentPreview = "";
+			confirmedText = "";
+			lastPrediction = "";
+			noHandCount = 0;
+			setCurrentWord(""); // clear UI text too
+		};
+		window.addEventListener("clear-translation", handleClear);
+
+		// 🕒 Capture webcam frame every 0.5 seconds
 		const interval = setInterval(async () => {
 			if (!localVideoRef.current || localVideoRef.current.readyState !== 4) return;
+
+			// 🎥 Capture current frame
 			const canvas = document.createElement("canvas");
 			canvas.width = 224;
 			canvas.height = 224;
 			const ctx = canvas.getContext("2d");
 			ctx.drawImage(localVideoRef.current, 0, 0, 224, 224);
+
+			// 🧩 Convert frame to image blob for backend
 			canvas.toBlob(async (blob) => {
 				if (!blob) return;
 				const formData = new FormData();
 				formData.append("file", blob, "frame.jpg");
+
 				try {
 					const res = await fetch(ASL_BACKEND_URL, { method: "POST", body: formData });
 					const data = await res.json();
-					if (!data?.prediction) return;
-					setCurrentWord((prev) => {
-						if (prev.slice(-1) === data.prediction) return prev;
-						return prev + data.prediction;
-					});
+
+					// 🚫 No hand detected
+					if (!data?.prediction) {
+						noHandCount++;
+						if (currentPreview && noHandCount >= 3) {
+							// ✅ Confirm last detected word when hand is removed
+							confirmedText = confirmedText ? `${confirmedText} ${currentPreview}` : currentPreview;
+
+							setCurrentWord(confirmedText);
+							currentPreview = "";
+							lastPrediction = "";
+						}
+						return;
+					}
+
+					// ✋ Reset counter when hand is visible
+					noHandCount = 0;
+
+					// 🔁 Update live preview if prediction changed
+					if (data.prediction !== lastPrediction) {
+						lastPrediction = data.prediction;
+						currentPreview = data.prediction;
+						setCurrentWord(`${confirmedText} ${currentPreview}`.trim());
+					}
 				} catch (err) {
-					console.error(err);
+					console.error("Prediction error:", err);
 				}
 			}, "image/jpeg");
-		}, 1000);
-		return () => clearInterval(interval);
+		}, 500);
+
+		// 🧹 Cleanup on call end or unmount
+		return () => {
+			clearInterval(interval);
+			window.removeEventListener("clear-translation", handleClear);
+		};
 	}, [callActive, localType]);
 
 	const sendTranslation = async () => {
@@ -465,7 +516,10 @@ export default function VideoCallPage() {
 						<h3 className="text-lg font-semibold text-gray-800">Live Translation</h3>
 						<div className="flex gap-2">
 							<button
-								onClick={sendTranslation}
+								onClick={async () => {
+									await sendTranslation();
+									window.dispatchEvent(new Event("clear-translation")); // 🧹 reset internal vars too
+								}}
 								className={`px-3 py-1 text-xs rounded-full text-white ${
 									localType === "DHH"
 										? "bg-green-500 hover:bg-green-600"
@@ -475,8 +529,12 @@ export default function VideoCallPage() {
 							>
 								Enter
 							</button>
+
 							<button
-								onClick={() => setCurrentWord("")}
+								onClick={() => {
+									setCurrentWord("");
+									window.dispatchEvent(new Event("clear-translation"));
+								}}
 								className="px-3 py-1 text-xs bg-red-500 text-white rounded-full"
 							>
 								Clear
