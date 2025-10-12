@@ -49,27 +49,34 @@ export default function VideoCallPage() {
 	};
 
 	// --- INITIALIZE CALL ---
-	const initializeCall = async (userUID, userName) => {
+	const initializeCall = async (userUID, userName, userType) => {
 		socket.current = io(SOCKET_SERVER_URL);
 
 		socket.current.on("connect", () => {
 			console.log("✅ Connected:", socket.current.id);
+			console.log("📤 Emitting register-user:", {
+				room: inviteCode.trim(),
+				uid: userUID,
+				name: userName,
+				userType,
+			});
+
 			// Send local user UID & name to room so others can fetch Firebase info
 			socket.current.emit("register-user", {
 				room: inviteCode.trim(),
 				uid: userUID,
 				name: userName,
+				userType, // ✅ added
 			});
 		});
 
 		socket.current.on("connect_error", (err) => console.warn("Socket error:", err));
 
-		// 🔹 Receive remote user's Firebase info
-		socket.current.on("user-info", async ({ uid, name }) => {
-			console.log("🟣 Remote user info received:", uid, name);
-			setRemoteName(name || "Remote");
-			remoteIdRef.current = uid;
-			setRemoteId(uid);
+		socket.current.on("user-info", async ({ uid, name, userType, socketId }) => {
+			console.log("🟣 Remote user info:", uid, name, userType, socketId);
+			setRemoteName(`${name} (${userType || "User"})`);
+			remoteIdRef.current = socketId; // ✅ signaling now uses socketId
+			setRemoteId(socketId);
 		});
 
 		socket.current.on("new-translation", (data) => {
@@ -106,18 +113,34 @@ export default function VideoCallPage() {
 
 		const getPc = () => pc.current;
 
-		pc.current.onnegotiationneeded = async () => {
-			try {
-				const _pc = getPc();
-				if (!_pc) return;
-				const target = remoteIdRef.current;
-				if (!target) return;
-				const offer = await _pc.createOffer();
-				await _pc.setLocalDescription(offer);
-				socket.current.emit("offer", { sdp: offer, to: target });
-			} catch (err) {
-				console.error("Negotiation error:", err);
+		// 🧠 --- DEBUG LOGGING FOR CONNECTION STATE ---
+		pc.current.onconnectionstatechange = () => {
+			console.log("🔌 Connection state:", pc.current.connectionState);
+			switch (pc.current.connectionState) {
+				case "new":
+					console.log("🟡 Connection created but not yet active.");
+					break;
+				case "connecting":
+					console.log("🟠 Trying to establish connection...");
+					break;
+				case "connected":
+					console.log("🟢 Peers connected! ✅ Media should flow.");
+					break;
+				case "disconnected":
+					console.warn("🔴 Connection temporarily lost.");
+					break;
+				case "failed":
+					console.error("❌ Connection failed! (Check TURN/STUN config)");
+					break;
+				case "closed":
+					console.log("⚪ Connection closed by peer.");
+					break;
 			}
+		};
+
+		// 🔍 ICE connection monitoring
+		pc.current.oniceconnectionstatechange = () => {
+			console.log("🧊 ICE connection state:", pc.current.iceConnectionState);
 		};
 
 		pc.current.ontrack = (event) => {
@@ -231,7 +254,7 @@ export default function VideoCallPage() {
 				console.log(`✅ Local User: ${userName} (${userType})`);
 			}
 
-			await initializeCall(user.uid, userName);
+			await initializeCall(user.uid, userName, userType);
 			await startVideo();
 			setCallActive(true);
 		} else {
