@@ -50,32 +50,35 @@ export default function VideoCallPage() {
 
 	// --- INITIALIZE CALL ---
 	const initializeCall = async (userUID, userName, userType) => {
-		socket.current = io(SOCKET_SERVER_URL);
+		socket.current = io(SOCKET_SERVER_URL, {
+			transports: ["websocket"], // ✅ force WebSocket transport
+			timeout: 20000,
+			reconnectionAttempts: 5,
+		});
 
 		socket.current.on("connect", () => {
 			console.log("✅ Connected:", socket.current.id);
-			console.log("📤 Emitting register-user:", {
+			console.log("📤 Registering user:", {
 				room: inviteCode.trim(),
 				uid: userUID,
 				name: userName,
 				userType,
 			});
 
-			// Send local user UID & name to room so others can fetch Firebase info
 			socket.current.emit("register-user", {
 				room: inviteCode.trim(),
 				uid: userUID,
 				name: userName,
-				userType, // ✅ added
+				userType,
 			});
 		});
 
-		socket.current.on("connect_error", (err) => console.warn("Socket error:", err));
+		socket.current.on("connect_error", (err) => console.warn("⚠️ Socket error:", err));
 
 		socket.current.on("user-info", async ({ uid, name, userType, socketId }) => {
 			console.log("🟣 Remote user info:", uid, name, userType, socketId);
 			setRemoteName(`${name} (${userType || "User"})`);
-			remoteIdRef.current = socketId; // ✅ signaling now uses socketId
+			remoteIdRef.current = socketId;
 			setRemoteId(socketId);
 		});
 
@@ -83,18 +86,13 @@ export default function VideoCallPage() {
 			setTranslations((prev) => [...prev, data]);
 		});
 
+		// ✅ Add Google STUN + TURN
 		pc.current = new RTCPeerConnection({
 			iceServers: [
-				{
-					urls: "stun:stun.relay.metered.ca:80",
-				},
+				{ urls: "stun:stun.l.google.com:19302" },
+				{ urls: "stun:stun.relay.metered.ca:80" },
 				{
 					urls: "turn:global.relay.metered.ca:80",
-					username: "99a9e39930369645c93f8879",
-					credential: "ebKW3RKGJ+RRKqBe",
-				},
-				{
-					urls: "turn:global.relay.metered.ca:80?transport=tcp",
 					username: "99a9e39930369645c93f8879",
 					credential: "ebKW3RKGJ+RRKqBe",
 				},
@@ -113,32 +111,22 @@ export default function VideoCallPage() {
 
 		const getPc = () => pc.current;
 
-		// 🧠 --- DEBUG LOGGING FOR CONNECTION STATE ---
+		// 🧠 Debug connection states
 		pc.current.onconnectionstatechange = () => {
 			console.log("🔌 Connection state:", pc.current.connectionState);
 			switch (pc.current.connectionState) {
-				case "new":
-					console.log("🟡 Connection created but not yet active.");
-					break;
-				case "connecting":
-					console.log("🟠 Trying to establish connection...");
-					break;
 				case "connected":
 					console.log("🟢 Peers connected! ✅ Media should flow.");
-					break;
-				case "disconnected":
-					console.warn("🔴 Connection temporarily lost.");
 					break;
 				case "failed":
 					console.error("❌ Connection failed! (Check TURN/STUN config)");
 					break;
-				case "closed":
-					console.log("⚪ Connection closed by peer.");
+				case "disconnected":
+					console.warn("🔴 Connection temporarily lost.");
 					break;
 			}
 		};
 
-		// 🔍 ICE connection monitoring
 		pc.current.oniceconnectionstatechange = () => {
 			console.log("🧊 ICE connection state:", pc.current.iceConnectionState);
 		};
@@ -161,24 +149,46 @@ export default function VideoCallPage() {
 			}
 		};
 
+		// 🟢 When a new user joins the same room, create an offer
+		socket.current.on("new-user", async (newUserSocketId) => {
+			console.log("👋 New peer joined the room:", newUserSocketId);
+			const _pc = getPc();
+			if (!_pc) return;
+
+			try {
+				const offer = await _pc.createOffer();
+				await _pc.setLocalDescription(offer);
+				socket.current.emit("offer", { sdp: offer, to: newUserSocketId });
+				console.log("📡 Sent SDP offer to:", newUserSocketId);
+			} catch (err) {
+				console.error("⚠️ Error creating offer:", err);
+			}
+		});
+
+		// 🔄 Handle incoming offer → respond with answer
 		socket.current.on("offer", async (data) => {
 			const fromId = data.from || data.sender || data.fromId;
 			if (!fromId) return;
 			remoteIdRef.current = fromId;
 			setRemoteId(fromId);
+
 			try {
 				const _pc = getPc();
 				if (!_pc) return;
 				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-				flushIceQueueTo(fromId);
+
+				// Send answer back
 				const answer = await _pc.createAnswer();
 				await _pc.setLocalDescription(answer);
 				socket.current.emit("answer", { sdp: answer, to: fromId });
+				flushIceQueueTo(fromId);
+				console.log("📡 Sent SDP answer to:", fromId);
 			} catch (err) {
-				console.error(err);
+				console.error("⚠️ Error handling offer:", err);
 			}
 		});
 
+		// 🔄 Handle answer from remote peer
 		socket.current.on("answer", async (data) => {
 			const fromId = data.from || data.sender || data.fromId;
 			try {
@@ -186,11 +196,13 @@ export default function VideoCallPage() {
 				if (!_pc) return;
 				await _pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
 				flushIceQueueTo(fromId || remoteIdRef.current);
+				console.log("✅ Remote description set from answer");
 			} catch (err) {
-				console.error(err);
+				console.error("⚠️ Error handling answer:", err);
 			}
 		});
 
+		// 🧊 Handle ICE candidates from remote peer
 		socket.current.on("ice-candidate", async ({ candidate }) => {
 			if (!candidate) return;
 			try {
@@ -198,11 +210,11 @@ export default function VideoCallPage() {
 				if (!_pc) return;
 				await _pc.addIceCandidate(new RTCIceCandidate(candidate));
 			} catch (err) {
-				console.error(err);
+				console.error("⚠️ Error adding ICE candidate:", err);
 			}
 		});
 
-		// 🔹 Join Room and Notify
+		// 🔹 Join Room
 		if (inviteCode.trim()) {
 			socket.current.emit("join-room", inviteCode.trim());
 			setIsRoomJoined(true);
