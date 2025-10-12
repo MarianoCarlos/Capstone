@@ -90,23 +90,23 @@ export default function VideoCallPage() {
 				},
 				{
 					urls: "turn:global.relay.metered.ca:80",
-					username: "d32a9a3a2410a9814d92f496",
-					credential: "1pHpTSjADEGTm86/",
+					username: "99a9e39930369645c93f8879",
+					credential: "ebKW3RKGJ+RRKqBe",
 				},
 				{
 					urls: "turn:global.relay.metered.ca:80?transport=tcp",
-					username: "d32a9a3a2410a9814d92f496",
-					credential: "1pHpTSjADEGTm86/",
+					username: "99a9e39930369645c93f8879",
+					credential: "ebKW3RKGJ+RRKqBe",
 				},
 				{
 					urls: "turn:global.relay.metered.ca:443",
-					username: "d32a9a3a2410a9814d92f496",
-					credential: "1pHpTSjADEGTm86/",
+					username: "99a9e39930369645c93f8879",
+					credential: "ebKW3RKGJ+RRKqBe",
 				},
 				{
 					urls: "turns:global.relay.metered.ca:443?transport=tcp",
-					username: "d32a9a3a2410a9814d92f496",
-					credential: "1pHpTSjADEGTm86/",
+					username: "99a9e39930369645c93f8879",
+					credential: "ebKW3RKGJ+RRKqBe",
 				},
 			],
 		});
