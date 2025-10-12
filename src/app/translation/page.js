@@ -18,7 +18,7 @@ import { getAuth } from "firebase/auth";
 import { collection, addDoc, doc, getDoc } from "firebase/firestore";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
-const ASL_BACKEND_URL = "https://words-backend-hosting.onrender.com/predict";
+const ASL_BACKEND_URL = "https://my-model-server.onrender.com/predict";
 
 export default function VideoCallPage() {
 	const localVideoRef = useRef(null);
@@ -331,6 +331,7 @@ export default function VideoCallPage() {
 			socket.current?.disconnect();
 		};
 	}, []);
+
 	// --- UI (UNCHANGED) ---
 	return (
 		<div className="flex h-screen bg-gray-100 text-gray-900 relative">
