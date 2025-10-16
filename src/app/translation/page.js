@@ -49,13 +49,16 @@ export default function VideoCallPage() {
 		iceQueue.current = [];
 	};
 
-	// --- INITIALIZE CALL ---
 	const initializeCall = async (userUID, userName, userType) => {
 		socket.current = io(SOCKET_SERVER_URL, {
 			transports: ["websocket"], // ✅ force WebSocket transport
 			timeout: 20000,
 			reconnectionAttempts: 5,
+			reconnectionDelay: 2000,
+			reconnectionDelayMax: 8000,
 		});
+
+		let isCaller = false; // 🔹 prevents double-offer race
 
 		socket.current.on("connect", () => {
 			console.log("✅ Connected:", socket.current.id);
@@ -87,7 +90,20 @@ export default function VideoCallPage() {
 			setTranslations((prev) => [...prev, data]);
 		});
 
-		// ✅ Add Google STUN + TURN
+		// 🧩 Handle remote user disconnect
+		socket.current.on("user-left", () => {
+			console.log("👋 Remote user disconnected");
+			if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+			setRemoteId(null);
+			setRemoteName("Remote");
+		});
+
+		// 🧩 Reconnection debugging logs
+		socket.current.on("reconnect_attempt", (n) => console.log(`🔄 Reconnect attempt ${n}`));
+		socket.current.on("reconnect", () => console.log("✅ Reconnected to signaling server"));
+		socket.current.on("reconnect_failed", () => console.error("❌ Reconnect failed"));
+
+		// ✅ TURN/STUN
 		pc.current = new RTCPeerConnection({
 			iceServers: [
 				{ urls: "stun:stun.l.google.com:19302" },
@@ -112,7 +128,7 @@ export default function VideoCallPage() {
 
 		const getPc = () => pc.current;
 
-		// 🧠 Debug connection states
+		// 🧠 Connection state logs
 		pc.current.onconnectionstatechange = () => {
 			console.log("🔌 Connection state:", pc.current.connectionState);
 			switch (pc.current.connectionState) {
@@ -150,8 +166,11 @@ export default function VideoCallPage() {
 			}
 		};
 
-		// 🟢 When a new user joins the same room, create an offer
+		// 🟢 When a new user joins the same room, send offer only once
 		socket.current.on("new-user", async (newUserSocketId) => {
+			if (isCaller) return; // prevent duplicate offers
+			isCaller = true;
+
 			console.log("👋 New peer joined the room:", newUserSocketId);
 			const _pc = getPc();
 			if (!_pc) return;
@@ -168,6 +187,7 @@ export default function VideoCallPage() {
 
 		// 🔄 Handle incoming offer → respond with answer
 		socket.current.on("offer", async (data) => {
+			isCaller = false; // this peer will answer only
 			const fromId = data.from || data.sender || data.fromId;
 			if (!fromId) return;
 			remoteIdRef.current = fromId;
@@ -273,6 +293,10 @@ export default function VideoCallPage() {
 		} else {
 			localVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
 			remoteVideoRef.current?.srcObject?.getTracks()?.forEach((t) => t.stop());
+
+			// 🧹 Clear remote video feed visually
+			if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+
 			pc.current?.close();
 			socket.current?.disconnect();
 			setCallActive(false);
