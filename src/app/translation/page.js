@@ -15,7 +15,7 @@ import {
 
 import { db } from "@/utils/firebaseConfig";
 import { getAuth } from "firebase/auth";
-import { collection, addDoc, doc, getDoc } from "firebase/firestore";
+import { collection, addDoc, doc, getDoc, serverTimestamp } from "firebase/firestore";
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
@@ -444,7 +444,7 @@ export default function VideoCallPage() {
 		if (localType !== "DHH") return alert("Hearing users cannot use gesture translation.");
 		if (!currentWord.trim() || !socket.current) return;
 
-		const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+		const timestamp = new Date().toISOString();
 		const obj = { sender: localName, text: currentWord.trim(), timestamp };
 
 		setTranslations((p) => [...p, obj]);
@@ -454,7 +454,7 @@ export default function VideoCallPage() {
 			room: inviteCode,
 			sender: localName,
 			text: currentWord.trim(),
-			timestamp: new Date().toISOString(),
+			timestamp: serverTimestamp(),
 		});
 
 		// Reset buffer after sending full phrase
@@ -464,8 +464,9 @@ export default function VideoCallPage() {
 	const sendChatMessage = async () => {
 		if (localType === "DHH") return alert("DHH users cannot send typed messages.");
 		if (!manualMessage.trim() || !socket.current) return;
-		const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+		const timestamp = new Date().toISOString();
 		const obj = { sender: localName, text: manualMessage, timestamp };
+
 		setTranslations((p) => [...p, obj]);
 		socket.current.emit("new-translation", obj);
 		setManualMessage("");
@@ -473,7 +474,7 @@ export default function VideoCallPage() {
 			room: inviteCode,
 			sender: localName,
 			text: manualMessage,
-			timestamp: new Date().toISOString(),
+			timestamp: serverTimestamp(),
 		});
 	};
 
@@ -691,7 +692,17 @@ export default function VideoCallPage() {
 								<p className="text-xs text-gray-600 mb-1 font-semibold">{item.sender}</p>
 								<p className="font-medium text-gray-800">{item.text}</p>
 								<div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-									<span>{item.timestamp}</span>
+									<div className="flex justify-between items-center mt-2 text-xs text-gray-500">
+										<span>
+											{item.timestamp && !isNaN(Date.parse(item.timestamp))
+												? new Date(item.timestamp).toLocaleTimeString([], {
+														hour: "2-digit",
+														minute: "2-digit",
+														hour12: true, // 👈 ensures 12-hour format with AM/PM
+												  })
+												: "Pending"}
+										</span>
+									</div>
 								</div>
 								<div className="flex gap-2 mt-3 justify-end">
 									<button

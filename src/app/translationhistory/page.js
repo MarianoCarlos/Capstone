@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { db, auth } from "@/utils/firebaseConfig";
-import { collection, query, orderBy, onSnapshot } from "firebase/firestore";
+import { collection, query, orderBy, onSnapshot, serverTimestamp } from "firebase/firestore";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { Book, MessageSquare, User, LogOut, Camera, Home, History, ChevronDown, ChevronRight } from "lucide-react";
 
@@ -161,7 +161,29 @@ export default function TranslationHistoryPage() {
 														</p>
 														<span className="text-xs text-gray-500 dark:text-gray-400">
 															{t.timestamp
-																? new Date(t.timestamp).toLocaleString()
+																? (() => {
+																		const dateObj = t.timestamp.toDate
+																			? t.timestamp.toDate()
+																			: new Date(t.timestamp);
+
+																		// ✅ Format: DD/MM/YYYY - HH:MM AM/PM
+																		const datePart = `${String(
+																			dateObj.getDate()
+																		).padStart(2, "0")}/${String(
+																			dateObj.getMonth() + 1
+																		).padStart(2, "0")}/${dateObj.getFullYear()}`;
+
+																		const timePart = dateObj.toLocaleTimeString(
+																			[],
+																			{
+																				hour: "2-digit",
+																				minute: "2-digit",
+																				hour12: true,
+																			}
+																		);
+
+																		return `${datePart} - ${timePart}`;
+																  })()
 																: "Pending"}
 														</span>
 													</div>
