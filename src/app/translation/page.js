@@ -15,7 +15,7 @@ import {
 
 import { db } from "@/utils/firebaseConfig";
 import { getAuth } from "firebase/auth";
-import { collection, addDoc, doc, getDoc, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, doc, getDoc } from "firebase/firestore";
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
@@ -450,34 +450,30 @@ export default function VideoCallPage() {
 		setTranslations((p) => [...p, obj]);
 		socket.current.emit("new-translation", obj);
 
-		// ✅ Save to Firestore using server timestamp
 		await addDoc(collection(db, "translations"), {
 			room: inviteCode,
 			sender: localName,
 			text: currentWord.trim(),
-			timestamp: serverTimestamp(),
+			timestamp: new Date().toISOString(),
 		});
 
-		setCurrentWord(""); // reset after sending
+		// Reset buffer after sending full phrase
+		setCurrentWord("");
 	};
 
 	const sendChatMessage = async () => {
 		if (localType === "DHH") return alert("DHH users cannot send typed messages.");
 		if (!manualMessage.trim() || !socket.current) return;
-
 		const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 		const obj = { sender: localName, text: manualMessage, timestamp };
-
 		setTranslations((p) => [...p, obj]);
 		socket.current.emit("new-translation", obj);
 		setManualMessage("");
-
-		// ✅ Save to Firestore using server timestamp
 		await addDoc(collection(db, "translations"), {
 			room: inviteCode,
 			sender: localName,
 			text: manualMessage,
-			timestamp: serverTimestamp(),
+			timestamp: new Date().toISOString(),
 		});
 	};
 
