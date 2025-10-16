@@ -17,6 +17,7 @@ import {
 	setDoc,
 	orderBy,
 	limit,
+	addDoc,
 } from "firebase/firestore";
 import { Book, MessageSquare, User, LogOut, Camera, Home, History } from "lucide-react";
 
@@ -26,6 +27,21 @@ export default function UserDashboard() {
 	const [totalTranslations, setTotalTranslations] = useState(0);
 	const [todaysTranslations, setTodaysTranslations] = useState(0);
 	const [recentTranslations, setRecentTranslations] = useState([]);
+
+	// ✅ Helper function to save new translations with a server timestamp
+	async function saveTranslation(room, sender, text) {
+		try {
+			await addDoc(collection(db, "translations"), {
+				room,
+				sender,
+				text,
+				timestamp: serverTimestamp(), // 🔥 Firestore server-based timestamp
+			});
+			console.log("✅ Translation saved successfully with server timestamp!");
+		} catch (error) {
+			console.error("❌ Error saving translation:", error);
+		}
+	}
 
 	const pathname = usePathname();
 
@@ -274,7 +290,7 @@ export default function UserDashboard() {
 											{t.sender || "Anonymous"}
 										</p>
 										<span className="text-xs text-gray-500 dark:text-gray-400">
-											{t.timestamp ? new Date(t.timestamp).toLocaleString() : "Pending"}
+											{t.timestamp?.toDate ? t.timestamp.toDate().toLocaleString() : "Pending"}
 										</span>
 									</div>
 									<p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">

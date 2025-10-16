@@ -160,8 +160,8 @@ export default function TranslationHistoryPage() {
 															{t.sender || "Anonymous"}
 														</p>
 														<span className="text-xs text-gray-500 dark:text-gray-400">
-															{t.timestamp
-																? new Date(t.timestamp).toLocaleString()
+															{t.timestamp?.toDate
+																? t.timestamp.toDate().toLocaleString()
 																: "Pending"}
 														</span>
 													</div>
