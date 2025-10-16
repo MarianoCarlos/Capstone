@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import StatCard from "@/components/dashboard/StatCard";
 import OverviewTab from "@/components/dashboard/OverviewTab";
 import UsersTab from "@/components/dashboard/UserTab";
 import AnalyticsTab from "@/components/dashboard/AnalyticsTab";
@@ -19,11 +18,6 @@ const AdminDashboard = () => {
 
 	const [recentUsers, setRecentUsers] = useState([]);
 	const [recentFeedback, setRecentFeedback] = useState([]);
-	const [systemStats, setSystemStats] = useState({
-		totalUsers: 0,
-		activeUsers: 0,
-		dailyTranslations: 0,
-	});
 	const [feedbackStats, setFeedbackStats] = useState({
 		averageRating: 0,
 		newFeedback: 0,
@@ -57,12 +51,6 @@ const AdminDashboard = () => {
 				};
 			});
 			setRecentUsers(usersData);
-
-			// Update system stats
-			const totalUsers = snapshot.size;
-			const activeUsers = usersData.filter((u) => u.status === "active").length;
-			const dailyTranslations = 0; // Replace with your translations count if needed
-			setSystemStats({ totalUsers, activeUsers, dailyTranslations });
 		});
 
 		return () => unsubscribe();
@@ -107,6 +95,7 @@ const AdminDashboard = () => {
 
 	return (
 		<div className="min-h-screen flex bg-gradient-to-b from-gray-50 to-white dark:from-black dark:to-gray-900 font-sans">
+			{/* Sidebar */}
 			<aside className="w-64 bg-white/90 dark:bg-gray-900/80 shadow-md p-6 hidden md:flex flex-col fixed top-0 left-0 h-screen">
 				<h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Dashboard</h2>
 
@@ -138,13 +127,6 @@ const AdminDashboard = () => {
 						<LogOut className="w-5 h-5" /> Logout
 					</button>
 				</header>
-
-				{/* Stats Section */}
-				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-10">
-					<StatCard title="Total Users" value={systemStats.totalUsers} />
-					<StatCard title="Active Users" value={systemStats.activeUsers} />
-					<StatCard title="Daily Translations" value={systemStats.dailyTranslations} />
-				</div>
 
 				{/* Tab Content */}
 				{activeTab === "overview" && (

@@ -7,7 +7,7 @@ import toast from "react-hot-toast";
 import { auth, db } from "../../utils/firebaseConfig";
 import { updatePassword, reauthenticateWithCredential, EmailAuthProvider, deleteUser } from "firebase/auth";
 import { doc, getDoc, updateDoc, deleteDoc } from "firebase/firestore";
-import { Book, MessageSquare, User, Camera, Home, Eye, EyeOff } from "lucide-react";
+import { Book, MessageSquare, User, Camera, Home, Eye, EyeOff, History } from "lucide-react";
 
 export default function ProfilePage() {
 	const [userInfo, setUserInfo] = useState({
@@ -29,6 +29,7 @@ export default function ProfilePage() {
 		{ href: "/translation", label: "Translation", icon: <Camera className="w-5 h-5" /> },
 		{ href: "/gesturelibrary", label: "Gesture Library", icon: <Book className="w-5 h-5" /> },
 		{ href: "/feedback", label: "Feedback", icon: <MessageSquare className="w-5 h-5" /> },
+		{ href: "/translationhistory", label: "Translation History", icon: <History className="w-5 h-5" /> },
 		{ href: "/profile", label: "Profile", icon: <User className="w-5 h-5" /> },
 	];
 

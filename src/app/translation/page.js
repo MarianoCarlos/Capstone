@@ -16,9 +16,10 @@ import {
 import { db } from "@/utils/firebaseConfig";
 import { getAuth } from "firebase/auth";
 import { collection, addDoc, doc, getDoc } from "firebase/firestore";
+import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
-const ASL_BACKEND_URL = "https://my-model-server.onrender.com/predict";
+const ASL_BACKEND_URL = "http://localhost:5000/predict";
 
 export default function VideoCallPage() {
 	const localVideoRef = useRef(null);
@@ -305,94 +306,135 @@ export default function VideoCallPage() {
 	useEffect(() => {
 		if (!callActive || localType !== "DHH") return;
 
-		// 🧠 Internal tracking variables
-		let currentPreview = ""; // word being detected in real-time
-		let confirmedText = ""; // finalized words (sentence)
-		let lastPrediction = ""; // last backend response
-		let noHandCount = 0; // how long no hand is visible
+		let handLandmarker;
+		let isRunning = true;
 
-		// 🧹 Reset internal variables when Clear button is pressed
-		const handleClear = () => {
-			console.log("🧹 Resetting translation state...");
-			currentPreview = "";
-			confirmedText = "";
-			lastPrediction = "";
-			noHandCount = 0;
-			setCurrentWord(""); // clear UI text too
+		const sentenceRef = { current: "" }; // holds continuous sentence
+		const clearListener = () => {
+			sentenceRef.current = "";
+			setCurrentWord("");
+			console.log("🧹 Cleared translation buffer.");
 		};
-		window.addEventListener("clear-translation", handleClear);
+		window.addEventListener("clear-translation", clearListener);
+		let lastLabel = "";
+		let stableCount = 0;
+		let lastAppendTime = 0;
 
-		// 🕒 Capture webcam frame every 0.5 seconds
-		const interval = setInterval(async () => {
-			if (!localVideoRef.current || localVideoRef.current.readyState !== 4) return;
+		async function initMediaPipe() {
+			const vision = await FilesetResolver.forVisionTasks(
+				"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
+			);
 
-			// 🎥 Capture current frame
-			const canvas = document.createElement("canvas");
-			canvas.width = 224;
-			canvas.height = 224;
-			const ctx = canvas.getContext("2d");
-			ctx.drawImage(localVideoRef.current, 0, 0, 224, 224);
+			handLandmarker = await HandLandmarker.createFromOptions(vision, {
+				baseOptions: {
+					modelAssetPath:
+						"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+				},
+				runningMode: "VIDEO",
+				numHands: 2,
+			});
 
-			// 🧩 Convert frame to image blob for backend
-			canvas.toBlob(async (blob) => {
-				if (!blob) return;
-				const formData = new FormData();
-				formData.append("file", blob, "frame.jpg");
+			console.log("🖐️ MediaPipe Hands initialized");
+			startDetectionLoop();
+		}
+
+		async function startDetectionLoop() {
+			let lastVideoTime = -1;
+
+			async function loop() {
+				if (!isRunning || !localVideoRef.current) return requestAnimationFrame(loop);
+				const video = localVideoRef.current;
+
+				if (video.currentTime === lastVideoTime) return requestAnimationFrame(loop);
+				lastVideoTime = video.currentTime;
 
 				try {
-					const res = await fetch(ASL_BACKEND_URL, { method: "POST", body: formData });
-					const data = await res.json();
+					const results = await handLandmarker.detectForVideo(video, performance.now());
 
-					// 🚫 No hand detected
-					if (!data?.prediction) {
-						noHandCount++;
-						if (currentPreview && noHandCount >= 3) {
-							// ✅ Confirm last detected word when hand is removed
-							confirmedText = confirmedText ? `${confirmedText} ${currentPreview}` : currentPreview;
+					if (results.landmarks && results.landmarks.length > 0) {
+						const hands = results.landmarks.map((lm, i) => {
+							const handed = results.handedness?.[i]?.[0]?.categoryName || "Unknown";
+							return {
+								handedness: handed,
+								points: lm.map((p) => ({ x: p.x, y: p.y, z: p.z })),
+							};
+						});
 
-							setCurrentWord(confirmedText);
-							currentPreview = "";
-							lastPrediction = "";
+						const res = await fetch(ASL_BACKEND_URL, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ hands }),
+						});
+						const data = await res.json();
+
+						if (data.label) {
+							const label = data.label.trim();
+							if (!label) return;
+
+							// Always show what model currently sees
+							setCurrentWord((prev) => {
+								const preview = sentenceRef.current ? `${sentenceRef.current} ${label}`.trim() : label;
+								return preview;
+							});
+
+							// Check if this label is stable (avoid flicker)
+							if (label === lastLabel) {
+								stableCount++;
+							} else {
+								stableCount = 1;
+								lastLabel = label;
+							}
+
+							// After stable detection for several frames, append it once
+							if (stableCount > 10 && Date.now() - lastAppendTime > 800) {
+								const words = sentenceRef.current.trim().split(" ");
+								const lastWord = words[words.length - 1];
+								if (lastWord?.toLowerCase() !== label.toLowerCase()) {
+									sentenceRef.current = (sentenceRef.current + " " + label).trim();
+								}
+								setCurrentWord(sentenceRef.current); // update UI
+								lastAppendTime = Date.now();
+								stableCount = 0;
+							}
 						}
-						return;
-					}
-
-					// ✋ Reset counter when hand is visible
-					noHandCount = 0;
-
-					// 🔁 Update live preview if prediction changed
-					if (data.prediction !== lastPrediction) {
-						lastPrediction = data.prediction;
-						currentPreview = data.prediction;
-						setCurrentWord(`${confirmedText} ${currentPreview}`.trim());
 					}
 				} catch (err) {
 					console.error("Prediction error:", err);
 				}
-			}, "image/jpeg");
-		}, 500);
 
-		// 🧹 Cleanup on call end or unmount
+				requestAnimationFrame(loop);
+			}
+
+			loop();
+		}
+
+		initMediaPipe();
+
 		return () => {
-			clearInterval(interval);
-			window.removeEventListener("clear-translation", handleClear);
+			isRunning = false;
+			window.removeEventListener("clear-translation", clearListener);
 		};
 	}, [callActive, localType]);
 
 	const sendTranslation = async () => {
 		if (localType !== "DHH") return alert("Hearing users cannot use gesture translation.");
 		if (!currentWord.trim() || !socket.current) return;
+
 		const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-		const obj = { sender: localName, text: currentWord, timestamp };
+		const obj = { sender: localName, text: currentWord.trim(), timestamp };
+
 		setTranslations((p) => [...p, obj]);
 		socket.current.emit("new-translation", obj);
-		setCurrentWord("");
+
 		await addDoc(collection(db, "translations"), {
 			room: inviteCode,
 			sender: localName,
-			text: currentWord,
+			text: currentWord.trim(),
 			timestamp: new Date().toISOString(),
 		});
+
+		// Reset buffer after sending full phrase
+		setCurrentWord("");
 	};
 
 	const sendChatMessage = async () => {

@@ -5,13 +5,27 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { auth, db } from "../../utils/firebaseConfig";
 import { onAuthStateChanged, signOut } from "firebase/auth";
-import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, onSnapshot } from "firebase/firestore";
-import { Book, MessageSquare, User, LogOut, Camera, Home } from "lucide-react";
+import {
+	collection,
+	query,
+	where,
+	onSnapshot,
+	Timestamp,
+	serverTimestamp,
+	doc,
+	getDoc,
+	setDoc,
+	orderBy,
+	limit,
+} from "firebase/firestore";
+import { Book, MessageSquare, User, LogOut, Camera, Home, History } from "lucide-react";
 
 export default function UserDashboard() {
 	const [userName, setUserName] = useState("");
 	const [loading, setLoading] = useState(true);
-	const [activeUsers, setActiveUsers] = useState(0);
+	const [totalTranslations, setTotalTranslations] = useState(0);
+	const [todaysTranslations, setTodaysTranslations] = useState(0);
+	const [recentTranslations, setRecentTranslations] = useState([]);
 
 	const pathname = usePathname();
 
@@ -20,10 +34,10 @@ export default function UserDashboard() {
 		{ href: "/translation", label: "Translation", icon: <Camera className="w-5 h-5" /> },
 		{ href: "/gesturelibrary", label: "Gesture Library", icon: <Book className="w-5 h-5" /> },
 		{ href: "/feedback", label: "Feedback", icon: <MessageSquare className="w-5 h-5" /> },
+		{ href: "/translationhistory", label: "Translation History", icon: <History className="w-5 h-5" /> },
 		{ href: "/profile", label: "Profile", icon: <User className="w-5 h-5" /> },
 	];
 
-	// Sidebar highlight styling
 	const getLinkClasses = (href) =>
 		`flex items-center gap-2 px-3 py-2 rounded-lg transition font-medium ${
 			pathname === href
@@ -32,48 +46,61 @@ export default function UserDashboard() {
 		}`;
 
 	useEffect(() => {
-		let unsubscribeActiveUsers;
-		let interval;
+		let unsubscribeTotal = null;
+		let unsubscribeToday = null;
 
-		const trackUser = async (user) => {
-			const userRef = doc(db, "users", user.uid);
+		const translationsRef = collection(db, "translations");
 
-			await setDoc(userRef, { lastActive: serverTimestamp() }, { merge: true });
+		// === TOTAL TRANSLATIONS ===
+		const totalQ = query(translationsRef);
+		unsubscribeTotal = onSnapshot(totalQ, (snapshot) => {
+			setTotalTranslations(snapshot.size);
+		});
 
-			const docSnap = await getDoc(userRef);
-			if (docSnap.exists()) {
-				const data = docSnap.data();
-				setUserName(`${data.firstName || ""} ${data.lastName || ""}`);
-			} else {
-				setUserName(user.displayName || "");
-			}
+		// === TODAY'S TRANSLATIONS ===
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		const startOfDay = Timestamp.fromDate(today);
 
-			const usersRef = collection(db, "users");
-			const q = query(usersRef, where("lastActive", ">", new Date(Date.now() - 60000)));
-			unsubscribeActiveUsers = onSnapshot(q, (snapshot) => {
-				setActiveUsers(snapshot.size);
-			});
+		const todayQ = query(translationsRef, where("timestamp", ">=", startOfDay));
+		unsubscribeToday = onSnapshot(todayQ, (snapshot) => {
+			setTodaysTranslations(snapshot.size);
+		});
 
-			interval = setInterval(() => {
-				setDoc(userRef, { lastActive: serverTimestamp() }, { merge: true });
-			}, 30000);
+		// === RECENT TRANSLATIONS ===
+		const recentQ = query(translationsRef, orderBy("timestamp", "desc"), limit(5));
+		const unsubscribeRecent = onSnapshot(recentQ, (snapshot) => {
+			const data = snapshot.docs.map((doc) => ({
+				id: doc.id,
+				...doc.data(),
+			}));
+			setRecentTranslations(data);
+		});
 
-			setLoading(false);
-		};
-
-		const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+		// Track Auth User (for greeting only)
+		const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
 			if (user) {
-				trackUser(user);
+				const userRef = doc(db, "users", user.uid);
+				await setDoc(userRef, { lastActive: serverTimestamp() }, { merge: true });
+
+				const docSnap = await getDoc(userRef);
+				if (docSnap.exists()) {
+					const data = docSnap.data();
+					setUserName(`${data.firstName || ""} ${data.lastName || ""}`);
+				} else {
+					setUserName(user.displayName || "");
+				}
 			} else {
 				window.location.href = "/login";
-				setLoading(false);
 			}
+			setLoading(false);
 		});
 
 		return () => {
+			if (unsubscribeTotal) unsubscribeTotal();
+			if (unsubscribeToday) unsubscribeToday();
+			if (unsubscribeRecent) unsubscribeRecent();
 			unsubscribeAuth();
-			if (unsubscribeActiveUsers) unsubscribeActiveUsers();
-			if (interval) clearInterval(interval);
 		};
 	}, []);
 
@@ -89,7 +116,7 @@ export default function UserDashboard() {
 
 	return (
 		<div className="min-h-screen flex bg-gradient-to-b from-gray-50 to-white dark:from-black dark:to-gray-900 font-sans">
-			{/* Sidebar (Fixed) */}
+			{/* Sidebar */}
 			<aside className="fixed top-0 left-0 h-full w-64 bg-white/90 dark:bg-gray-900/80 shadow-md p-6 hidden md:flex flex-col">
 				<h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Dashboard</h2>
 				<nav className="flex flex-col gap-3 flex-1">
@@ -103,9 +130,8 @@ export default function UserDashboard() {
 
 			{/* Main Content */}
 			<main className="flex-1 ml-64 p-8">
-				{/* Header */}
 				<header className="relative z-10 flex justify-between items-center mb-8 py-4">
-					<h1 className="text-3xl font-bold text-gray-900 dark:text-white">Welcome, {userName}!</h1>
+					<h1 className="text-3xl font-bold text-gray-900 dark:text-white">Welcome, {userName || "User"}!</h1>
 					<button
 						onClick={handleLogout}
 						className="flex items-center gap-2 text-gray-900 dark:text-white hover:text-red-500"
@@ -114,24 +140,35 @@ export default function UserDashboard() {
 					</button>
 				</header>
 
-				{/* Dashboard Cards (placeholders, no mock values) */}
-				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-					{["Total Translations", "Today's Translations", "Active Users", "Accuracy Rate"].map(
-						(title, idx) => (
-							<div key={idx} className={cardBaseClass}>
-								<div>
-									<p className="text-sm text-gray-700 dark:text-gray-400">{title}</p>
-									<p className="text-2xl font-bold text-gray-900 dark:text-white">--</p>
-								</div>
-								<div className="w-12 h-12 bg-gray-900 dark:bg-gray-200 rounded-lg flex items-center justify-center">
-									<User className="w-6 h-6 text-white dark:text-black" />
-								</div>
-							</div>
-						)
-					)}
-				</div>
+				{/* Dashboard Cards */}
+				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6 mb-10">
+					{/* Total Translations */}
+					<div className={cardBaseClass}>
+						<div>
+							<p className="text-sm text-gray-700 dark:text-gray-400">Total Translations</p>
+							<p className="text-2xl font-bold text-gray-900 dark:text-white">
+								{totalTranslations ?? "--"}
+							</p>
+						</div>
+						<div className="w-12 h-12 bg-gray-900 dark:bg-gray-200 rounded-lg flex items-center justify-center">
+							<User className="w-6 h-6 text-white dark:text-black" />
+						</div>
+					</div>
 
-				{/* Sidebar Explanations (Navigation Guide) */}
+					{/* Today's Translations */}
+					<div className={cardBaseClass}>
+						<div>
+							<p className="text-sm text-gray-700 dark:text-gray-400">Today's Translations</p>
+							<p className="text-2xl font-bold text-gray-900 dark:text-white">
+								{todaysTranslations ?? "--"}
+							</p>
+						</div>
+						<div className="w-12 h-12 bg-gray-900 dark:bg-gray-200 rounded-lg flex items-center justify-center">
+							<User className="w-6 h-6 text-white dark:text-black" />
+						</div>
+					</div>
+				</div>
+				{/* Navigation Guide */}
 				<div className="mb-10">
 					<div className="mb-6">
 						<h3 className="text-xl font-bold tracking-wide text-gray-900 dark:text-white">
@@ -216,18 +253,44 @@ export default function UserDashboard() {
 					</div>
 				</div>
 
-				{/* Translation History (no mock items, empty placeholder) */}
+				{/* Recent Translations */}
 				<div className="bg-white/90 dark:bg-gray-900/80 shadow-md rounded-3xl p-6">
 					<h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Recent Translations</h3>
 					<p className="text-sm text-gray-700 dark:text-gray-400 mb-4">Your latest ASL to text conversions</p>
 
 					<div className="space-y-4">
-						<p className="text-sm text-gray-500 dark:text-gray-400 italic">No recent translations yet.</p>
+						{recentTranslations.length === 0 ? (
+							<p className="text-sm text-gray-500 dark:text-gray-400 italic">
+								No recent translations yet.
+							</p>
+						) : (
+							recentTranslations.map((t) => (
+								<div
+									key={t.id}
+									className="p-4 rounded-2xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-lg transition-transform hover:-translate-y-1"
+								>
+									<div className="flex justify-between items-center mb-2">
+										<p className="font-semibold text-gray-900 dark:text-white">
+											{t.sender || "Anonymous"}
+										</p>
+										<span className="text-xs text-gray-500 dark:text-gray-400">
+											{t.timestamp ? new Date(t.timestamp).toLocaleString() : "Pending"}
+										</span>
+									</div>
+									<p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+										{t.text || "No translation data"}
+									</p>
+								</div>
+							))
+						)}
 					</div>
 
-					<button className="w-full mt-6 border-2 border-gray-200 dark:border-gray-700 rounded-2xl py-2 text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition font-medium">
+					<Link
+						href="/translationhistory"
+						className="block w-full mt-6 border-2 border-gray-200 dark:border-gray-700 rounded-2xl py-2 text-center text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition font-medium"
+					>
 						View All History
-					</button>
+					</Link>
 				</div>
 			</main>
 		</div>

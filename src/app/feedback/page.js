@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Book, Camera, User, MessageSquare } from "lucide-react";
+import { Home, Book, Camera, User, MessageSquare, History } from "lucide-react";
 
 // Firebase
 import { auth, db } from "@/utils/firebaseConfig";
@@ -56,6 +56,7 @@ export default function FeedbackPage() {
 		{ href: "/translation", label: "Translation", icon: <Camera className="w-5 h-5" /> },
 		{ href: "/gesturelibrary", label: "Gesture Library", icon: <Book className="w-5 h-5" /> },
 		{ href: "/feedback", label: "Feedback", icon: <MessageSquare className="w-5 h-5" /> },
+		{ href: "/translationhistory", label: "Translation History", icon: <History className="w-5 h-5" /> },
 		{ href: "/profile", label: "Profile", icon: <User className="w-5 h-5" /> },
 	];
 
