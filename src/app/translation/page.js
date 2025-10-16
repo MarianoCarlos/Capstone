@@ -51,11 +51,11 @@ export default function VideoCallPage() {
 
 	const initializeCall = async (userUID, userName, userType) => {
 		socket.current = io(SOCKET_SERVER_URL, {
-			transports: ["websocket"], // ✅ force WebSocket transport
-			timeout: 20000,
-			reconnectionAttempts: 5,
-			reconnectionDelay: 2000,
-			reconnectionDelayMax: 8000,
+			transports: ["websocket"],
+			timeout: 60000,
+			reconnectionAttempts: 10,
+			reconnectionDelay: 3000,
+			reconnectionDelayMax: 15000,
 		});
 
 		let isCaller = false; // 🔹 prevents double-offer race
