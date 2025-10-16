@@ -19,7 +19,7 @@ import { collection, addDoc, doc, getDoc } from "firebase/firestore";
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
-const ASL_BACKEND_URL = "http://localhost:5000/predict";
+const ASL_BACKEND_URL = "https://my-model-server.onrender.com/predict";
 
 export default function VideoCallPage() {
 	const localVideoRef = useRef(null);
