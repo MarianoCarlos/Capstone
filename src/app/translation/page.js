@@ -11,6 +11,8 @@ import {
 	FaCopy,
 	FaVolumeUp,
 	FaArrowLeft,
+	FaBars,
+	FaComments,
 } from "react-icons/fa";
 
 import { db } from "@/utils/firebaseConfig";
@@ -19,7 +21,7 @@ import { collection, addDoc, doc, getDoc, serverTimestamp } from "firebase/fires
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
-const ASL_BACKEND_URL = "https://my-model-server.onrender.com/predict";
+const ASL_BACKEND_URL = "https://sign-language-backend-render-host-mlp.onrender.com/predict";
 
 export default function VideoCallPage() {
 	const localVideoRef = useRef(null);
@@ -42,6 +44,8 @@ export default function VideoCallPage() {
 	const [localType, setLocalType] = useState(""); // "DHH" or "HEARING"
 	const [inviteCode, setInviteCode] = useState("");
 	const [isRoomJoined, setIsRoomJoined] = useState(false);
+	const [showLeft, setShowLeft] = useState(false);
+	const [showRight, setShowRight] = useState(false);
 
 	const flushIceQueueTo = (id) => {
 		if (!socket.current || !id) return;
@@ -346,7 +350,7 @@ export default function VideoCallPage() {
 
 		async function initMediaPipe() {
 			const vision = await FilesetResolver.forVisionTasks(
-				"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
+				"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm",
 			);
 
 			handLandmarker = await HandLandmarker.createFromOptions(vision, {
@@ -488,8 +492,34 @@ export default function VideoCallPage() {
 	// --- UI (UNCHANGED) ---
 	return (
 		<div className="flex h-screen bg-gray-100 text-gray-900 relative">
+			{/* MOBILE MENU BUTTONS */}
+			<div className="md:hidden fixed top-4 left-4 z-50">
+				<button
+					onClick={() => setShowLeft(!showLeft)}
+					className="p-3 bg-gray-900 text-white rounded-full shadow-lg active:scale-90 transition"
+				>
+					<FaBars size={20} />
+				</button>
+			</div>
+
+			<div className="md:hidden fixed top-4 right-4 z-50">
+				<button
+					onClick={() => setShowRight(!showRight)}
+					className="p-3 bg-gray-900 text-white rounded-full shadow-lg active:scale-90 transition"
+				>
+					<FaComments size={20} />
+				</button>
+			</div>
+
 			{/* Left Sidebar */}
-			<div className="fixed top-0 left-0 h-full w-80 bg-white/95 shadow-xl p-6 border-r border-gray-200 flex flex-col justify-between">
+			<div
+				className={`
+        fixed top-0 left-0 h-full w-72 bg-white/95 shadow-xl p-6 border-r border-gray-200
+        flex flex-col justify-between transform transition-transform duration-300 z-40
+        ${showLeft ? "translate-x-0" : "-translate-x-full"}
+        md:translate-x-0 md:w-80
+    `}
+			>
 				<div>
 					<Link href="/userdashboard">
 						<div className="p-3 mb-8 bg-gray-800 text-white rounded-full shadow-md hover:bg-gray-900 transition w-fit mx-auto">
@@ -537,7 +567,10 @@ export default function VideoCallPage() {
 			</div>
 
 			{/* Main */}
-			<main className="flex-1 flex flex-col items-center justify-center p-6 gap-6 ml-80 mr-80">
+			<main
+				className="flex-1 flex flex-col items-center justify-center p-4 md:p-6 gap-6 
+    md:ml-80 md:mr-80 overflow-auto"
+			>
 				{/* Videos */}
 				<div className="flex flex-col md:flex-row gap-6 w-full max-w-5xl items-center justify-center">
 					{/* Local */}
@@ -678,7 +711,14 @@ export default function VideoCallPage() {
 				</div>
 			</main>
 
-			<aside className="fixed top-0 right-0 h-full w-80 bg-white/95 shadow-xl p-6 overflow-y-auto border-l border-gray-200 flex flex-col">
+			<aside
+				className={`
+        fixed top-0 right-0 h-full w-72 bg-white/95 shadow-xl p-6 overflow-y-auto border-l border-gray-200
+        transform transition-transform duration-300 z-40 flex flex-col
+        ${showRight ? "translate-x-0" : "translate-x-full"}
+        md:translate-x-0 md:w-80
+    `}
+			>
 				<h2 className="text-2xl font-bold mb-6 text-gray-900">Translation History</h2>
 				<div className="flex flex-col gap-4">
 					{translations.map((item, i) => {
@@ -699,7 +739,7 @@ export default function VideoCallPage() {
 														hour: "2-digit",
 														minute: "2-digit",
 														hour12: true, // 👈 ensures 12-hour format with AM/PM
-												  })
+													})
 												: "Pending"}
 										</span>
 									</div>
