@@ -1,32 +1,47 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { collection, getDocs } from "firebase/firestore";
+import { db } from "@/utils/firebaseConfig";
 import { Home, Book, Camera, User, MessageSquare, HistoryIcon } from "lucide-react";
 
 export default function GestureLibrary() {
+	const [gestures, setGestures] = useState([]);
 	const [searchTerm, setSearchTerm] = useState("");
 	const [filter, setFilter] = useState("all");
+	const [loading, setLoading] = useState(true);
 	const pathname = usePathname();
 
-	const gestures = [
-		{ title: "Letter A", category: "letters", type: "image", src: "/gestures/letters/A.png" },
-		{ title: "Letter B", category: "letters", type: "image", src: "/gestures/letters/B.png" },
-		{ title: "Number 1", category: "numbers", type: "image", src: "/gestures/numbers/1.png" },
-		{ title: "Number 2", category: "numbers", type: "image", src: "/gestures/numbers/2.png" },
-		{ title: "Hello", category: "words", type: "video", src: "/gestures/words/hello.mp4" },
-		{ title: "Thank You", category: "words", type: "video", src: "/gestures/words/thankyou.mp4" },
-		{ title: "Good Morning", category: "phrases", type: "video", src: "/gestures/phrases/goodmorning.mp4" },
-		{ title: "How are you?", category: "phrases", type: "video", src: "/gestures/phrases/howareyou.mp4" },
-	];
+	// 🔥 Fetch gestures from Firestore
+	useEffect(() => {
+		const fetchGestures = async () => {
+			try {
+				const querySnapshot = await getDocs(collection(db, "gestures"));
+				const data = querySnapshot.docs.map((doc) => ({
+					id: doc.id,
+					...doc.data(),
+				}));
+				setGestures(data);
+			} catch (error) {
+				console.error("❌ Error fetching gestures:", error);
+			} finally {
+				setLoading(false);
+			}
+		};
 
+		fetchGestures();
+	}, []);
+
+	// 🔍 Filter & search gestures
 	const filteredGestures = gestures.filter((gesture) => {
 		const matchesCategory = filter === "all" || gesture.category === filter;
-		const matchesSearch = gesture.title.toLowerCase().includes(searchTerm.toLowerCase());
+		const matchesSearch = gesture.title?.toLowerCase().includes(searchTerm.toLowerCase());
 		return matchesCategory && matchesSearch;
 	});
 
+	// 📱 Sidebar Navigation
 	const navItems = [
 		{ href: "/userdashboard", label: "Home", icon: <Home className="w-5 h-5" /> },
 		{ href: "/translation", label: "Translation", icon: <Camera className="w-5 h-5" /> },
@@ -97,39 +112,42 @@ export default function GestureLibrary() {
 				</div>
 
 				{/* Gesture Grid */}
-				<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-8">
-					{filteredGestures.map((gesture, idx) => (
-						<div
-							key={idx}
-							className="rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-700 shadow hover:shadow-lg transition-transform hover:-translate-y-1 bg-white dark:bg-gray-800"
-						>
-							{gesture.type === "image" ? (
-								<img
-									src={gesture.src}
-									alt={gesture.title}
-									className="w-full h-48 object-contain bg-gray-100 dark:bg-gray-900"
-								/>
-							) : (
-								<video
-									src={gesture.src}
-									controls
-									className="w-full h-48 object-contain bg-gray-100 dark:bg-gray-900"
-								/>
-							)}
-							<div className="p-4 text-center">
-								<h3 className="text-lg font-bold text-gray-900 dark:text-white">{gesture.title}</h3>
-								<p className="text-sm text-gray-600 dark:text-gray-300 capitalize">
-									{gesture.category}
-								</p>
+				{loading ? (
+					<p className="text-center text-gray-600 dark:text-gray-400">Loading gestures...</p>
+				) : (
+					<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-8">
+						{filteredGestures.map((gesture) => (
+							<div
+								key={gesture.id}
+								className="rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-700 shadow hover:shadow-lg transition-transform hover:-translate-y-1 bg-white dark:bg-gray-800"
+							>
+								{gesture.type === "image" ? (
+									<img
+										src={gesture.src}
+										alt={gesture.title}
+										className="w-full h-48 object-contain bg-gray-100 dark:bg-gray-900"
+									/>
+								) : (
+									<video
+										src={gesture.src}
+										controls
+										className="w-full h-48 object-contain bg-gray-100 dark:bg-gray-900"
+									/>
+								)}
+								<div className="p-4 text-center">
+									<h3 className="text-lg font-bold text-gray-900 dark:text-white">{gesture.title}</h3>
+									<p className="text-sm text-gray-600 dark:text-gray-300 capitalize">{gesture.category}</p>
+								</div>
 							</div>
-						</div>
-					))}
-					{filteredGestures.length === 0 && (
-						<p className="col-span-full text-center text-gray-700 dark:text-gray-300 mt-6">
-							No gestures found.
-						</p>
-					)}
-				</div>
+						))}
+
+						{filteredGestures.length === 0 && !loading && (
+							<p className="col-span-full text-center text-gray-700 dark:text-gray-300 mt-6">
+								No gestures found.
+							</p>
+						)}
+					</div>
+				)}
 			</main>
 		</div>
 	);
