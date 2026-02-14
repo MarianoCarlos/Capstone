@@ -347,7 +347,6 @@ export default function VideoCallPage() {
 		let lastLabel = "";
 		let stableCount = 0;
 		let lastAppendTime = 0;
-		let lastVideoTime = 0;
 
 		async function initMediaPipe() {
 			const vision = await FilesetResolver.forVisionTasks(
@@ -368,63 +367,45 @@ export default function VideoCallPage() {
 		}
 
 		async function startDetectionLoop() {
-			let lastSendTime = -1;
-			const SEND_INTERVAL = 120;
-			const STABLE_FRAMES = 8;
-			const COOLDOWN = 1000;
+			let lastVideoTime = -1;
 
 			async function loop() {
 				if (!isRunning || !localVideoRef.current) return requestAnimationFrame(loop);
-
 				const video = localVideoRef.current;
 
 				if (video.currentTime === lastVideoTime) return requestAnimationFrame(loop);
-
 				lastVideoTime = video.currentTime;
 
 				try {
 					const results = await handLandmarker.detectForVideo(video, performance.now());
 
 					if (results.landmarks && results.landmarks.length > 0) {
-						const hands = results.landmarks.map((lm, i) => ({
-							handedness: results.handedness?.[i]?.[0]?.categoryName || "Unknown",
-							points: lm.map((p) => ({
-								x: p.x,
-								y: p.y,
-								z: p.z,
-							})),
-						}));
-
-						const now = Date.now();
-						if (now - lastSendTime < SEND_INTERVAL) return requestAnimationFrame(loop);
-
-						lastSendTime = now;
-
-						const controller = new AbortController();
-						const timeout = setTimeout(() => controller.abort(), 1000);
+						const hands = results.landmarks.map((lm, i) => {
+							const handed = results.handedness?.[i]?.[0]?.categoryName || "Unknown";
+							return {
+								handedness: handed,
+								points: lm.map((p) => ({ x: p.x, y: p.y, z: p.z })),
+							};
+						});
 
 						const res = await fetch(ASL_BACKEND_URL, {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
 							body: JSON.stringify({ hands }),
-							signal: controller.signal,
 						});
-
-						clearTimeout(timeout);
-
-						if (!res.ok) return requestAnimationFrame(loop);
-
 						const data = await res.json();
 
-						if (data.label && data.confidence > 0.8) {
+						if (data.label) {
 							const label = data.label.trim();
-							if (!label) return requestAnimationFrame(loop);
+							if (!label) return;
 
-							// 🔹 Live preview
-							const preview = sentenceRef.current ? `${sentenceRef.current} ${label}`.trim() : label;
+							// Always show what model currently sees
+							setCurrentWord((prev) => {
+								const preview = sentenceRef.current ? `${sentenceRef.current} ${label}`.trim() : label;
+								return preview;
+							});
 
-							setCurrentWord(preview);
-
+							// Check if this label is stable (avoid flicker)
 							if (label === lastLabel) {
 								stableCount++;
 							} else {
@@ -432,27 +413,26 @@ export default function VideoCallPage() {
 								lastLabel = label;
 							}
 
-							if (stableCount >= STABLE_FRAMES && Date.now() - lastAppendTime > COOLDOWN) {
-								const words = sentenceRef.current.trim() ? sentenceRef.current.trim().split(" ") : [];
-
-								const lastWord = words.length > 0 ? words[words.length - 1] : null;
-
+							// After stable detection for several frames, append it once
+							if (stableCount > 10 && Date.now() - lastAppendTime > 800) {
+								const words = sentenceRef.current.trim().split(" ");
+								const lastWord = words[words.length - 1];
 								if (lastWord?.toLowerCase() !== label.toLowerCase()) {
 									sentenceRef.current = (sentenceRef.current + " " + label).trim();
 								}
-
-								setCurrentWord(sentenceRef.current);
+								setCurrentWord(sentenceRef.current); // update UI
 								lastAppendTime = Date.now();
 								stableCount = 0;
 							}
 						}
 					}
 				} catch (err) {
-					console.warn("Prediction error:", err.message);
+					console.error("Prediction error:", err);
 				}
 
 				requestAnimationFrame(loop);
 			}
+
 			loop();
 		}
 
