@@ -368,63 +368,85 @@ export default function VideoCallPage() {
 
 		async function startDetectionLoop() {
 			let lastVideoTime = -1;
+			let lastPredictionTime = 0;
+			const PREDICTION_INTERVAL = 200; // 🔥 5 FPS instead of 60
 
 			async function loop() {
 				if (!isRunning || !localVideoRef.current) return requestAnimationFrame(loop);
+
 				const video = localVideoRef.current;
 
 				if (video.currentTime === lastVideoTime) return requestAnimationFrame(loop);
+
 				lastVideoTime = video.currentTime;
+
+				// 🔥 Throttle backend requests
+				if (Date.now() - lastPredictionTime < PREDICTION_INTERVAL) {
+					return requestAnimationFrame(loop);
+				}
+				lastPredictionTime = Date.now();
 
 				try {
 					const results = await handLandmarker.detectForVideo(video, performance.now());
 
-					if (results.landmarks && results.landmarks.length > 0) {
-						const hands = results.landmarks.map((lm, i) => {
-							const handed = results.handedness?.[i]?.[0]?.categoryName || "Unknown";
-							return {
-								handedness: handed,
-								points: lm.map((p) => ({ x: p.x, y: p.y, z: p.z })),
-							};
-						});
+					if (!results.landmarks || results.landmarks.length === 0) {
+						return requestAnimationFrame(loop);
+					}
 
-						const res = await fetch(ASL_BACKEND_URL, {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ hands }),
-						});
-						const data = await res.json();
+					const hands = results.landmarks.map((lm, i) => {
+						const handed = results.handedness?.[i]?.[0]?.categoryName || "Unknown";
 
-						if (data.label) {
-							const label = data.label.trim();
-							if (!label) return;
+						return {
+							handedness: handed,
+							points: lm.map((p) => ({
+								x: p.x,
+								y: p.y,
+								z: p.z,
+							})),
+						};
+					});
 
-							// Always show what model currently sees
-							setCurrentWord((prev) => {
-								const preview = sentenceRef.current ? `${sentenceRef.current} ${label}`.trim() : label;
-								return preview;
-							});
+					const res = await fetch(ASL_BACKEND_URL, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ hands }),
+					});
 
-							// Check if this label is stable (avoid flicker)
-							if (label === lastLabel) {
-								stableCount++;
-							} else {
-								stableCount = 1;
-								lastLabel = label;
-							}
+					const data = await res.json();
 
-							// After stable detection for several frames, append it once
-							if (stableCount > 10 && Date.now() - lastAppendTime > 800) {
-								const words = sentenceRef.current.trim().split(" ");
-								const lastWord = words[words.length - 1];
-								if (lastWord?.toLowerCase() !== label.toLowerCase()) {
-									sentenceRef.current = (sentenceRef.current + " " + label).trim();
-								}
-								setCurrentWord(sentenceRef.current); // update UI
-								lastAppendTime = Date.now();
-								stableCount = 0;
-							}
+					const label = data.label?.trim();
+					const confidence = data.confidence ?? 1;
+
+					if (!label || confidence < 0.7) {
+						return requestAnimationFrame(loop);
+					}
+
+					// --- Stability Check ---
+					if (label === lastLabel) {
+						stableCount++;
+					} else {
+						stableCount = 1;
+						lastLabel = label;
+					}
+
+					// 🔥 Preview only after 3 stable frames
+					if (stableCount >= 3) {
+						const preview = sentenceRef.current ? `${sentenceRef.current} ${label}`.trim() : label;
+
+						setCurrentWord(preview);
+					}
+
+					// 🔥 Append only after stronger stability
+					if (stableCount >= 8) {
+						const words = sentenceRef.current.split(" ");
+						const lastWord = words[words.length - 1];
+
+						if (lastWord?.toLowerCase() !== label.toLowerCase()) {
+							sentenceRef.current = (sentenceRef.current + " " + label).trim();
 						}
+
+						setCurrentWord(sentenceRef.current);
+						stableCount = 0;
 					}
 				} catch (err) {
 					console.error("Prediction error:", err);
@@ -449,7 +471,11 @@ export default function VideoCallPage() {
 		if (!currentWord.trim() || !socket.current) return;
 
 		const timestamp = new Date().toISOString();
-		const obj = { sender: localName, text: currentWord.trim(), timestamp };
+		const obj = {
+			sender: localName,
+			text: currentWord.trim(),
+			timestamp,
+		};
 
 		setTranslations((p) => [...p, obj]);
 		socket.current.emit("new-translation", obj);
@@ -461,8 +487,9 @@ export default function VideoCallPage() {
 			timestamp: serverTimestamp(),
 		});
 
-		// Reset buffer after sending full phrase
+		// 🔥 Reset properly
 		setCurrentWord("");
+		window.dispatchEvent(new Event("clear-translation"));
 	};
 
 	const sendChatMessage = async () => {
