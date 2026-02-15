@@ -2,6 +2,7 @@
 import { useRef, useState, useEffect } from "react";
 import io from "socket.io-client";
 import Link from "next/link";
+import * as ort from "onnxruntime-web";
 import {
 	FaMicrophone,
 	FaMicrophoneSlash,
@@ -21,7 +22,6 @@ import { collection, addDoc, doc, getDoc, serverTimestamp } from "firebase/fires
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
-const ASL_BACKEND_URL = "https://sign-language-backend-render-host-mlp.onrender.com/predict";
 
 export default function VideoCallPage() {
 	const localVideoRef = useRef(null);
@@ -30,8 +30,12 @@ export default function VideoCallPage() {
 	const socket = useRef(null);
 	const iceQueue = useRef([]);
 	const remoteIdRef = useRef(null);
+	const onnxSessionRef = useRef(null);
+	const meanRef = useRef(null);
+	const stdRef = useRef(null);
+	const labelsRef = useRef(null);
+	const modelReadyRef = useRef(false);
 
-	const [remoteId, setRemoteId] = useState(null);
 	const [isMuted, setIsMuted] = useState(false);
 	const [cameraOn, setCameraOn] = useState(true);
 	const [callActive, setCallActive] = useState(false);
@@ -87,7 +91,6 @@ export default function VideoCallPage() {
 			console.log("🟣 Remote user info:", uid, name, userType, socketId);
 			setRemoteName(`${name} (${userType || "User"})`);
 			remoteIdRef.current = socketId;
-			setRemoteId(socketId);
 		});
 
 		socket.current.on("new-translation", (data) => {
@@ -98,7 +101,6 @@ export default function VideoCallPage() {
 		socket.current.on("user-left", () => {
 			console.log("👋 Remote user disconnected");
 			if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-			setRemoteId(null);
 			setRemoteName("Remote");
 		});
 
@@ -195,7 +197,6 @@ export default function VideoCallPage() {
 			const fromId = data.from || data.sender || data.fromId;
 			if (!fromId) return;
 			remoteIdRef.current = fromId;
-			setRemoteId(fromId);
 
 			try {
 				const _pc = getPc();
@@ -331,6 +332,112 @@ export default function VideoCallPage() {
 		speechSynthesis.speak(u);
 	};
 
+	// 🧠 Load ONNX Model Once
+	useEffect(() => {
+		async function loadModel() {
+			if (modelReadyRef.current) return;
+
+			console.log("🧠 Loading ONNX model...");
+
+			// Enable SIMD and multi-threading for better performance
+			ort.env.wasm.simd = true;
+			ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
+
+			onnxSessionRef.current = await ort.InferenceSession.create("/models/sign_model.onnx", {
+				executionProviders: ["webgl", "wasm"],
+				graphOptimizationLevel: "all",
+			});
+
+			meanRef.current = await fetch("/models/mean.json").then((r) => r.json());
+			stdRef.current = await fetch("/models/std.json").then((r) => r.json());
+			labelsRef.current = await fetch("/models/labels.json").then((r) => r.json());
+
+			modelReadyRef.current = true;
+
+			console.log("✅ ONNX model ready");
+		}
+
+		loadModel();
+	}, []);
+
+	// 🖐️ Preprocess hand landmarks to flat feature vector
+	function preprocessHands(hands) {
+		const handsData = [];
+
+		hands.forEach((hand) => {
+			let lm = hand.points.map((p) => [p.x, p.y, p.z]);
+
+			const wrist = lm[0];
+
+			lm = lm.map((p) => [p[0] - wrist[0], p[1] - wrist[1], p[2] - wrist[2]]);
+
+			const scale = Math.sqrt(lm[9][0] ** 2 + lm[9][1] ** 2 + lm[9][2] ** 2) + 1e-6;
+
+			lm = lm.map((p) => [p[0] / scale, p[1] / scale, p[2] / scale]);
+
+			handsData.push(lm);
+		});
+
+		handsData.sort((a, b) => a[0][0] - b[0][0]);
+
+		const zeroHand = Array.from({ length: 21 }, () => [0, 0, 0]);
+
+		const left = handsData[0] || zeroHand;
+		const right = handsData[1] || zeroHand;
+
+		return [...left.flat(), ...right.flat()];
+	}
+
+	// 🧠 Local ONNX prediction
+	async function predictLocal(flatFeatures) {
+		if (!modelReadyRef.current) return null;
+
+		const session = onnxSessionRef.current;
+		const mean = meanRef.current;
+		const std = stdRef.current;
+		const labels = labelsRef.current;
+
+		const normalized = new Float32Array(126);
+
+		for (let i = 0; i < 126; i++) {
+			normalized[i] = (flatFeatures[i] - mean[i]) / (std[i] + 1e-6);
+		}
+
+		// Dynamic input/output names for future-proof access
+		const inputName = session.inputNames[0];
+		const outputName = session.outputNames[0];
+
+		const tensor = new ort.Tensor("float32", normalized, [1, 126]);
+
+		const results = await session.run({
+			[inputName]: tensor,
+		});
+
+		const logits = results[outputName].data;
+
+		// Optimized softmax with reduced GC pressure
+		const maxLogit = Math.max(...logits);
+		let sum = 0;
+		const probs = new Float32Array(logits.length);
+
+		for (let i = 0; i < logits.length; i++) {
+			probs[i] = Math.exp(logits[i] - maxLogit);
+			sum += probs[i];
+		}
+
+		for (let i = 0; i < probs.length; i++) {
+			probs[i] /= sum;
+		}
+
+		const idx = Array.from(probs).indexOf(Math.max(...probs));
+		const confidence = probs[idx];
+
+		return {
+			label: labels[idx.toString()],
+			confidence,
+		};
+	}
+
 	useEffect(() => {
 		if (!callActive || localType !== "DHH") return;
 
@@ -346,7 +453,6 @@ export default function VideoCallPage() {
 		window.addEventListener("clear-translation", clearListener);
 		let lastLabel = "";
 		let stableCount = 0;
-		let lastAppendTime = 0;
 
 		async function initMediaPipe() {
 			const vision = await FilesetResolver.forVisionTasks(
@@ -406,16 +512,15 @@ export default function VideoCallPage() {
 						};
 					});
 
-					const res = await fetch(ASL_BACKEND_URL, {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ hands }),
-					});
+					if (!modelReadyRef.current) return requestAnimationFrame(loop);
 
-					const data = await res.json();
+					const flat = preprocessHands(hands);
 
-					const label = data.label?.trim();
-					const confidence = data.confidence ?? 1;
+					const prediction = await predictLocal(flat);
+
+					if (!prediction) return requestAnimationFrame(loop);
+
+					const { label, confidence } = prediction;
 
 					if (!label || confidence < 0.7) {
 						return requestAnimationFrame(loop);
