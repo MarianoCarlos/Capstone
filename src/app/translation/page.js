@@ -18,19 +18,26 @@ import {
 import { db } from "@/utils/firebaseConfig";
 import { getAuth } from "firebase/auth";
 import { collection, addDoc, doc, getDoc, serverTimestamp } from "firebase/firestore";
+import * as ort from "onnxruntime-web";
+import { FilesetResolver, HandLandmarker, FaceLandmarker, PoseLandmarker } from "@mediapipe/tasks-vision";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
-const ASL_WS_URL =
-	process.env.NEXT_PUBLIC_ASL_WS_URL || "wss://model-v4-backend.onrender.com/ws-sign";
 
 export default function VideoCallPage() {
 	const localVideoRef = useRef(null);
 	const remoteVideoRef = useRef(null);
+	const detectionCanvasRef = useRef(null);
 	const pc = useRef(null);
 	const socket = useRef(null);
-	const signSocket = useRef(null);
 	const iceQueue = useRef([]);
 	const remoteIdRef = useRef(null);
+	const handRef = useRef(null);
+	const faceRef = useRef(null);
+	const poseRef = useRef(null);
+	const sessionRef = useRef(null);
+	const meanRef = useRef(null);
+	const stdRef = useRef(null);
+	const labelsRef = useRef(null);
 
 	const [remoteId, setRemoteId] = useState(null);
 	const [isMuted, setIsMuted] = useState(false);
@@ -53,6 +60,180 @@ export default function VideoCallPage() {
 		iceQueue.current.forEach((candidate) => socket.current.emit("ice-candidate", { candidate, to: id }));
 		iceQueue.current = [];
 	};
+
+	// ---- AI INITIALIZATION ----
+	useEffect(() => {
+		async function initAI() {
+			const vision = await FilesetResolver.forVisionTasks(
+				"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm",
+			);
+			handRef.current = await HandLandmarker.createFromOptions(vision, {
+				baseOptions: {
+					modelAssetPath:
+						"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+				},
+				runningMode: "VIDEO",
+				numHands: 2,
+			});
+			faceRef.current = await FaceLandmarker.createFromOptions(vision, {
+				baseOptions: {
+					modelAssetPath:
+						"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+				},
+				runningMode: "VIDEO",
+				numFaces: 1,
+			});
+			poseRef.current = await PoseLandmarker.createFromOptions(vision, {
+				baseOptions: {
+					modelAssetPath:
+						"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+				},
+				runningMode: "VIDEO",
+			});
+			ort.env.wasm.wasmPaths = "/ort/";
+			ort.env.wasm.numThreads = 1;
+			sessionRef.current = await ort.InferenceSession.create("/model/sign_model.onnx", {
+				executionProviders: ["wasm"],
+			});
+			meanRef.current = await fetch("/model/mean.json").then((r) => r.json());
+			stdRef.current = await fetch("/model/std.json").then((r) => r.json());
+			labelsRef.current = await fetch("/model/labels.json").then((r) => r.json());
+			// [DEBUG] Mean length: meanRef.current?.length  (must be 158)
+			// [DEBUG] Std length:  stdRef.current?.length   (must be 158)
+			console.log("AI READY");
+		}
+		initAI();
+	}, []);
+
+	// ---- FEATURE EXTRACTOR (1:1 match with Python landmark_extractor) ----
+	function buildFeatures(handRes, faceRes, poseRes) {
+		const FEATURE_SIZE = 158;
+		let leftHand = new Array(63).fill(0);
+		let rightHand = new Array(63).fill(0);
+		let leftGlobal = [0, 0, 0];
+		let rightGlobal = [0, 0, 0];
+		let leftDistances = new Array(5).fill(0);
+		let rightDistances = new Array(5).fill(0);
+		let leftEar = new Array(2).fill(0);
+		let rightEar = new Array(2).fill(0);
+		let poseUpper = new Array(12).fill(0);
+		let facePoints = null;
+		let faceScale = 1;
+
+		// FACE
+		if (faceRes.faceLandmarks && faceRes.faceLandmarks.length > 0) {
+			const lm = faceRes.faceLandmarks[0];
+			const idxs = {
+				nose: 1,
+				chin: 152,
+				forehead: 10,
+				left_cheek: 234,
+				right_cheek: 454,
+				left_ear: 127,
+				right_ear: 356,
+			};
+			facePoints = {};
+			Object.entries(idxs).forEach(([key, index]) => {
+				const p = lm[index];
+				facePoints[key] = [p.x, p.y, p.z];
+			});
+			const chin = facePoints["chin"];
+			const forehead = facePoints["forehead"];
+			faceScale =
+				Math.sqrt((chin[0] - forehead[0]) ** 2 + (chin[1] - forehead[1]) ** 2 + (chin[2] - forehead[2]) ** 2) +
+				1e-6;
+		}
+
+		// HANDS
+		if (handRes.landmarks && handRes.landmarks.length > 0) {
+			handRes.landmarks.forEach((landmarks, idx) => {
+				// Tasks API uses person-perspective handedness; training used camera-perspective.
+				// They are opposite, so we invert the assignment (not the label).
+				const handedness = handRes.handedness[idx][0].categoryName;
+				const arr = landmarks.map((l) => [l.x, l.y, l.z]);
+				const wrist = arr[0];
+				const centered = arr.map((p) => [p[0] - wrist[0], p[1] - wrist[1], p[2] - wrist[2]]);
+				const scale = Math.sqrt(centered[9][0] ** 2 + centered[9][1] ** 2 + centered[9][2] ** 2) + 1e-6;
+				const normalized = centered.map((p) => [p[0] / scale, p[1] / scale, p[2] / scale]);
+				const flat = normalized.flat();
+				const globalCenter = [
+					arr.reduce((a, b) => a + b[0], 0) / 21,
+					arr.reduce((a, b) => a + b[1], 0) / 21,
+					arr.reduce((a, b) => a + b[2], 0) / 21,
+				];
+				const thumb = arr[4];
+				let faceDist = new Array(5).fill(0);
+				let earDist = new Array(2).fill(0);
+				if (facePoints) {
+					const keysFace = ["nose", "chin", "forehead", "left_cheek", "right_cheek"];
+					keysFace.forEach((k, i) => {
+						const fp = facePoints[k];
+						const d = Math.sqrt(
+							(thumb[0] - fp[0]) ** 2 + (thumb[1] - fp[1]) ** 2 + (thumb[2] - fp[2]) ** 2,
+						);
+						faceDist[i] = d / faceScale;
+					});
+					const keysEar = ["left_ear", "right_ear"];
+					keysEar.forEach((k, i) => {
+						const fp = facePoints[k];
+						const d = Math.sqrt(
+							(thumb[0] - fp[0]) ** 2 + (thumb[1] - fp[1]) ** 2 + (thumb[2] - fp[2]) ** 2,
+						);
+						earDist[i] = d / faceScale;
+					});
+				}
+				// Inverted assignment: Tasks API "Left" → training "Right" and vice versa
+				if (handedness === "Left") {
+					rightHand = flat;
+					rightGlobal = globalCenter;
+					rightDistances = faceDist;
+					rightEar = earDist;
+				} else {
+					leftHand = flat;
+					leftGlobal = globalCenter;
+					leftDistances = faceDist;
+					leftEar = earDist;
+				}
+			});
+		}
+
+		// POSE
+		if (poseRes.landmarks && poseRes.landmarks.length > 0) {
+			const lm = poseRes.landmarks[0];
+			const leftShoulder = lm[11];
+			const rightShoulder = lm[12];
+			const center = [
+				(leftShoulder.x + rightShoulder.x) / 2,
+				(leftShoulder.y + rightShoulder.y) / 2,
+				(leftShoulder.z + rightShoulder.z) / 2,
+			];
+			const scale =
+				Math.sqrt(
+					(leftShoulder.x - rightShoulder.x) ** 2 +
+						(leftShoulder.y - rightShoulder.y) ** 2 +
+						(leftShoulder.z - rightShoulder.z) ** 2,
+				) + 1e-6;
+			const selected = [11, 12, 13, 14];
+			poseUpper = selected.flatMap((i) => {
+				const p = lm[i];
+				return [(p.x - center[0]) / scale, (p.y - center[1]) / scale, (p.z - center[2]) / scale];
+			});
+		}
+
+		const features = [
+			...leftHand,
+			...rightHand,
+			...leftGlobal,
+			...rightGlobal,
+			...leftDistances,
+			...rightDistances,
+			...leftEar,
+			...rightEar,
+			...poseUpper,
+		];
+		if (features.length !== FEATURE_SIZE) return null;
+		return features;
+	}
 
 	const initializeCall = async (userUID, userName, userType) => {
 		socket.current = io(SOCKET_SERVER_URL, {
@@ -252,7 +433,10 @@ export default function VideoCallPage() {
 
 	const startVideo = async () => {
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+			const stream = await navigator.mediaDevices.getUserMedia({
+				video: { width: { ideal: 640 }, height: { ideal: 480 } },
+				audio: true,
+			});
 			if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 			const _pc = pc.current;
 			if (!_pc) return;
@@ -334,132 +518,147 @@ export default function VideoCallPage() {
 
 	useEffect(() => {
 		if (!callActive || localType !== "DHH") return;
+		if (!sessionRef.current) return;
 
-		let isRunning = true;
+		let animationId;
 		let isProcessing = false;
+		let lastPredictionTime = 0;
+		const PREDICTION_INTERVAL = 50;
 		const sentenceRef = { current: "" };
-		let lastLabel = "";
-		let stableCount = 0;
+
+		// Sliding window majority voting — mirrors Python deque(maxlen=15) + Counter logic
+		const WINDOW_SIZE = 15;
+		const REQUIRED_COUNT = 8;
+		const COOLDOWN_FRAMES = 20;
+		const predictionBuffer = [];
+		let cooldown = 0;
+		let lastOutput = "";
 
 		const clearListener = () => {
 			sentenceRef.current = "";
+			predictionBuffer.length = 0;
+			cooldown = 0;
+			lastOutput = "";
 			setCurrentWord("");
 		};
 		window.addEventListener("clear-translation", clearListener);
 
-		// 🔥 CONNECT TO ASL WEBSOCKET
-		signSocket.current = new WebSocket(ASL_WS_URL);
-
-		signSocket.current.binaryType = "blob";
-
-		signSocket.current.onopen = () => {
-			console.log("✅ ASL WebSocket Connected");
-		};
-
-		signSocket.current.onclose = () => {
-			console.log("❌ ASL WebSocket Disconnected");
-		};
-
-		signSocket.current.onerror = (err) => {
-			console.error("ASL WS Error:", err);
-		};
-
-		signSocket.current.onmessage = (event) => {
-			isProcessing = false;
-			const data = JSON.parse(event.data);
-
-			const label = data.prediction;
-			const confidence = data.confidence;
-
-			if (!label || confidence < 0.75) return;
-
-			if (label === lastLabel) {
-				stableCount++;
-			} else {
-				stableCount = 1;
-				lastLabel = label;
-			}
-
-			if (stableCount >= 3) {
-				const preview = sentenceRef.current
-					? `${sentenceRef.current} ${label}`.trim()
-					: label;
-
-				setCurrentWord(preview);
-			}
-
-			if (stableCount >= 7) {
-				const words = sentenceRef.current.split(" ");
-				const lastWordInSentence = words[words.length - 1];
-
-				if (lastWordInSentence?.toLowerCase() !== label.toLowerCase()) {
-					sentenceRef.current =
-						(sentenceRef.current + " " + label).trim();
-				}
-
-				setCurrentWord(sentenceRef.current);
-				stableCount = 0;
-			}
-		};
-
-		// 🔥 Frame Capture Loop
-		const canvas = document.createElement("canvas");
-		const ctx = canvas.getContext("2d");
-
-		canvas.width = 480;
-		canvas.height = 360;
-
-		const PREDICTION_INTERVAL = 200; // 5 FPS
-		let lastPredictionTime = 0;
-
-		function loop() {
-			if (!isRunning || !localVideoRef.current) {
-				requestAnimationFrame(loop);
-				return;
-			}
-
-			const now = Date.now();
-			if (now - lastPredictionTime < PREDICTION_INTERVAL) {
-				requestAnimationFrame(loop);
-				return;
-			}
-			lastPredictionTime = now;
-
+		async function loop() {
 			const video = localVideoRef.current;
-
-			if (!video.videoWidth) {
-				requestAnimationFrame(loop);
+			if (!video) {
+				animationId = requestAnimationFrame(loop);
 				return;
 			}
 
-			ctx.drawImage(video, 0, 0, 480, 360);
-
-			if (
-				signSocket.current &&
-				signSocket.current.readyState === WebSocket.OPEN &&
-				!isProcessing
-			) {
-				isProcessing = true;
-
-				canvas.toBlob(
-					(blob) => {
-						if (blob) {
-							signSocket.current.send(blob);
-						}
-					},
-					"image/jpeg",
-					0.6
-				);
+			if (!handRef.current || !faceRef.current || !poseRef.current) {
+				animationId = requestAnimationFrame(loop);
+				return;
 			}
 
-			requestAnimationFrame(loop);
+			if (!meanRef.current || !stdRef.current || !labelsRef.current) {
+				animationId = requestAnimationFrame(loop);
+				return;
+			}
+
+			const nowTime = Date.now();
+			if (nowTime - lastPredictionTime < PREDICTION_INTERVAL) {
+				animationId = requestAnimationFrame(loop);
+				return;
+			}
+			lastPredictionTime = nowTime;
+
+			if (isProcessing) {
+				animationId = requestAnimationFrame(loop);
+				return;
+			}
+			isProcessing = true;
+
+			// Draw to 640×480 canvas to match Python training resolution
+			if (!detectionCanvasRef.current) {
+				detectionCanvasRef.current = document.createElement("canvas");
+			}
+			const canvas = detectionCanvasRef.current;
+			canvas.width = 640;
+			canvas.height = 480;
+			const ctx = canvas.getContext("2d");
+			ctx.drawImage(video, 0, 0, 640, 480);
+
+			const now = performance.now();
+
+			const handRes = handRef.current.detectForVideo(canvas, now);
+			const faceRes = faceRef.current.detectForVideo(canvas, now);
+			const poseRes = poseRef.current.detectForVideo(canvas, now);
+
+			// Gate: no hands → clear buffer to avoid idle frames polluting the window
+			if (!handRes.landmarks || handRes.landmarks.length === 0) {
+				predictionBuffer.length = 0;
+				isProcessing = false;
+				animationId = requestAnimationFrame(loop);
+				return;
+			}
+
+			const features = buildFeatures(handRes, faceRes, poseRes);
+			if (!features) {
+				isProcessing = false;
+				animationId = requestAnimationFrame(loop);
+				return;
+			}
+
+			const normalized = features.map((v, i) => (v - meanRef.current[i]) / stdRef.current[i]);
+
+			const tensor = new ort.Tensor("float32", normalized, [1, 158]);
+			const output = await sessionRef.current.run({ input: tensor });
+			const logits = output.logits.data;
+
+			const maxLogit = Math.max(...logits);
+			const exps = logits.map((v) => Math.exp(v - maxLogit));
+			const sum = exps.reduce((a, b) => a + b, 0);
+			const probs = exps.map((v) => v / sum);
+
+			const bestIndex = probs.indexOf(Math.max(...probs));
+			const label = labelsRef.current[String(bestIndex)];
+			const confidence = probs[bestIndex];
+
+			// Debug (re-enable if needed): handedness, features, confidence
+			// console.log("[DEBUG] Handedness:", handRes.handedness?.map((h) => h[0]?.categoryName));
+			// console.log("[DEBUG] Feature length:", features?.length, "First 10:", features?.slice(0, 10));
+			// console.log("[DEBUG] Prediction:", label, "| Confidence:", confidence.toFixed(4));
+
+			// Push into sliding window buffer (only confident predictions)
+			if (confidence >= 0.6) {
+				predictionBuffer.push(label);
+				if (predictionBuffer.length > WINDOW_SIZE) predictionBuffer.shift();
+			}
+
+			// Majority vote — mirrors Python Counter logic
+			let stableLabel = null;
+			if (predictionBuffer.length === WINDOW_SIZE) {
+				const counts = {};
+				predictionBuffer.forEach((l) => {
+					counts[l] = (counts[l] || 0) + 1;
+				});
+				const [[topLabel, topCount]] = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+				if (topCount >= REQUIRED_COUNT) stableLabel = topLabel;
+			}
+
+			// Cooldown — mirrors Python cooldown_timer logic
+			if (cooldown > 0) {
+				cooldown--;
+			} else if (stableLabel && stableLabel !== lastOutput) {
+				lastOutput = stableLabel;
+				sentenceRef.current = sentenceRef.current ? `${sentenceRef.current} ${stableLabel}` : stableLabel;
+				setCurrentWord(sentenceRef.current);
+				cooldown = COOLDOWN_FRAMES;
+			}
+
+			isProcessing = false;
+			animationId = requestAnimationFrame(loop);
 		}
 
 		loop();
 
 		return () => {
-			isRunning = false;
-			signSocket.current?.close();
+			cancelAnimationFrame(animationId);
 			window.removeEventListener("clear-translation", clearListener);
 		};
 	}, [callActive, localType]);
@@ -511,7 +710,6 @@ export default function VideoCallPage() {
 		return () => {
 			pc.current?.close();
 			socket.current?.disconnect();
-			signSocket.current?.close();
 		};
 	}, []);
 

@@ -168,9 +168,9 @@ export default function TranslationHistoryPage() {
 
 																		// ✅ Format: DD/MM/YYYY - HH:MM AM/PM
 																		const datePart = `${String(
-																			dateObj.getDate()
+																			dateObj.getDate(),
 																		).padStart(2, "0")}/${String(
-																			dateObj.getMonth() + 1
+																			dateObj.getMonth() + 1,
 																		).padStart(2, "0")}/${dateObj.getFullYear()}`;
 
 																		const timePart = dateObj.toLocaleTimeString(
@@ -179,11 +179,11 @@ export default function TranslationHistoryPage() {
 																				hour: "2-digit",
 																				minute: "2-digit",
 																				hour12: true,
-																			}
+																			},
 																		);
 
 																		return `${datePart} - ${timePart}`;
-																  })()
+																	})()
 																: "Pending"}
 														</span>
 													</div>
