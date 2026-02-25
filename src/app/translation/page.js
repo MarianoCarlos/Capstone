@@ -2,7 +2,6 @@
 import { useRef, useState, useEffect } from "react";
 import io from "socket.io-client";
 import Link from "next/link";
-import * as ort from "onnxruntime-web";
 import {
 	FaMicrophone,
 	FaMicrophoneSlash,
@@ -19,23 +18,21 @@ import {
 import { db } from "@/utils/firebaseConfig";
 import { getAuth } from "firebase/auth";
 import { collection, addDoc, doc, getDoc, serverTimestamp } from "firebase/firestore";
-import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 
 const SOCKET_SERVER_URL = "https://backend-capstone-l19p.onrender.com";
+const ASL_WS_URL =
+	process.env.NEXT_PUBLIC_ASL_WS_URL || "wss://model-v4-backend.onrender.com/ws-sign";
 
 export default function VideoCallPage() {
 	const localVideoRef = useRef(null);
 	const remoteVideoRef = useRef(null);
 	const pc = useRef(null);
 	const socket = useRef(null);
+	const signSocket = useRef(null);
 	const iceQueue = useRef([]);
 	const remoteIdRef = useRef(null);
-	const onnxSessionRef = useRef(null);
-	const meanRef = useRef(null);
-	const stdRef = useRef(null);
-	const labelsRef = useRef(null);
-	const modelReadyRef = useRef(false);
 
+	const [remoteId, setRemoteId] = useState(null);
 	const [isMuted, setIsMuted] = useState(false);
 	const [cameraOn, setCameraOn] = useState(true);
 	const [callActive, setCallActive] = useState(false);
@@ -91,6 +88,7 @@ export default function VideoCallPage() {
 			console.log("🟣 Remote user info:", uid, name, userType, socketId);
 			setRemoteName(`${name} (${userType || "User"})`);
 			remoteIdRef.current = socketId;
+			setRemoteId(socketId);
 		});
 
 		socket.current.on("new-translation", (data) => {
@@ -101,6 +99,7 @@ export default function VideoCallPage() {
 		socket.current.on("user-left", () => {
 			console.log("👋 Remote user disconnected");
 			if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+			setRemoteId(null);
 			setRemoteName("Remote");
 		});
 
@@ -197,6 +196,7 @@ export default function VideoCallPage() {
 			const fromId = data.from || data.sender || data.fromId;
 			if (!fromId) return;
 			remoteIdRef.current = fromId;
+			setRemoteId(fromId);
 
 			try {
 				const _pc = getPc();
@@ -332,241 +332,134 @@ export default function VideoCallPage() {
 		speechSynthesis.speak(u);
 	};
 
-	// 🧠 Load ONNX Model Once
-	useEffect(() => {
-		async function loadModel() {
-			if (modelReadyRef.current) return;
-
-			console.log("🧠 Loading ONNX model...");
-
-			// Enable SIMD and multi-threading for better performance
-			ort.env.wasm.simd = true;
-			ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
-
-			onnxSessionRef.current = await ort.InferenceSession.create("/models/sign_model.onnx", {
-				executionProviders: ["webgl", "wasm"],
-				graphOptimizationLevel: "all",
-			});
-
-			meanRef.current = await fetch("/models/mean.json").then((r) => r.json());
-			stdRef.current = await fetch("/models/std.json").then((r) => r.json());
-			labelsRef.current = await fetch("/models/labels.json").then((r) => r.json());
-
-			modelReadyRef.current = true;
-
-			console.log("✅ ONNX model ready");
-		}
-
-		loadModel();
-	}, []);
-
-	// 🖐️ Preprocess hand landmarks to flat feature vector
-	function preprocessHands(hands) {
-		const handsData = [];
-
-		hands.forEach((hand) => {
-			let lm = hand.points.map((p) => [p.x, p.y, p.z]);
-
-			const wrist = lm[0];
-
-			lm = lm.map((p) => [p[0] - wrist[0], p[1] - wrist[1], p[2] - wrist[2]]);
-
-			const scale = Math.sqrt(lm[9][0] ** 2 + lm[9][1] ** 2 + lm[9][2] ** 2) + 1e-6;
-
-			lm = lm.map((p) => [p[0] / scale, p[1] / scale, p[2] / scale]);
-
-			handsData.push(lm);
-		});
-
-		handsData.sort((a, b) => a[0][0] - b[0][0]);
-
-		const zeroHand = Array.from({ length: 21 }, () => [0, 0, 0]);
-
-		const left = handsData[0] || zeroHand;
-		const right = handsData[1] || zeroHand;
-
-		return [...left.flat(), ...right.flat()];
-	}
-
-	// 🧠 Local ONNX prediction
-	async function predictLocal(flatFeatures) {
-		if (!modelReadyRef.current) return null;
-
-		const session = onnxSessionRef.current;
-		const mean = meanRef.current;
-		const std = stdRef.current;
-		const labels = labelsRef.current;
-
-		const normalized = new Float32Array(126);
-
-		for (let i = 0; i < 126; i++) {
-			normalized[i] = (flatFeatures[i] - mean[i]) / (std[i] + 1e-6);
-		}
-
-		// Dynamic input/output names for future-proof access
-		const inputName = session.inputNames[0];
-		const outputName = session.outputNames[0];
-
-		const tensor = new ort.Tensor("float32", normalized, [1, 126]);
-
-		const results = await session.run({
-			[inputName]: tensor,
-		});
-
-		const logits = results[outputName].data;
-
-		// Optimized softmax with reduced GC pressure
-		const maxLogit = Math.max(...logits);
-		let sum = 0;
-		const probs = new Float32Array(logits.length);
-
-		for (let i = 0; i < logits.length; i++) {
-			probs[i] = Math.exp(logits[i] - maxLogit);
-			sum += probs[i];
-		}
-
-		for (let i = 0; i < probs.length; i++) {
-			probs[i] /= sum;
-		}
-
-		const idx = Array.from(probs).indexOf(Math.max(...probs));
-		const confidence = probs[idx];
-
-		return {
-			label: labels[idx.toString()],
-			confidence,
-		};
-	}
-
 	useEffect(() => {
 		if (!callActive || localType !== "DHH") return;
 
-		let handLandmarker;
 		let isRunning = true;
-
-		const sentenceRef = { current: "" }; // holds continuous sentence
-		const clearListener = () => {
-			sentenceRef.current = "";
-			setCurrentWord("");
-			console.log("🧹 Cleared translation buffer.");
-		};
-		window.addEventListener("clear-translation", clearListener);
+		let isProcessing = false;
+		const sentenceRef = { current: "" };
 		let lastLabel = "";
 		let stableCount = 0;
 
-		async function initMediaPipe() {
-			const vision = await FilesetResolver.forVisionTasks(
-				"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm",
-			);
+		const clearListener = () => {
+			sentenceRef.current = "";
+			setCurrentWord("");
+		};
+		window.addEventListener("clear-translation", clearListener);
 
-			handLandmarker = await HandLandmarker.createFromOptions(vision, {
-				baseOptions: {
-					modelAssetPath:
-						"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-				},
-				runningMode: "VIDEO",
-				numHands: 2,
-			});
+		// 🔥 CONNECT TO ASL WEBSOCKET
+		signSocket.current = new WebSocket(ASL_WS_URL);
 
-			console.log("🖐️ MediaPipe Hands initialized");
-			startDetectionLoop();
-		}
+		signSocket.current.binaryType = "blob";
 
-		async function startDetectionLoop() {
-			let lastVideoTime = -1;
-			let lastPredictionTime = 0;
-			const PREDICTION_INTERVAL = 200; // 🔥 5 FPS instead of 60
+		signSocket.current.onopen = () => {
+			console.log("✅ ASL WebSocket Connected");
+		};
 
-			async function loop() {
-				if (!isRunning || !localVideoRef.current) return requestAnimationFrame(loop);
+		signSocket.current.onclose = () => {
+			console.log("❌ ASL WebSocket Disconnected");
+		};
 
-				const video = localVideoRef.current;
+		signSocket.current.onerror = (err) => {
+			console.error("ASL WS Error:", err);
+		};
 
-				if (video.currentTime === lastVideoTime) return requestAnimationFrame(loop);
+		signSocket.current.onmessage = (event) => {
+			isProcessing = false;
+			const data = JSON.parse(event.data);
 
-				lastVideoTime = video.currentTime;
+			const label = data.prediction;
+			const confidence = data.confidence;
 
-				// 🔥 Throttle backend requests
-				if (Date.now() - lastPredictionTime < PREDICTION_INTERVAL) {
-					return requestAnimationFrame(loop);
-				}
-				lastPredictionTime = Date.now();
+			if (!label || confidence < 0.75) return;
 
-				try {
-					const results = await handLandmarker.detectForVideo(video, performance.now());
-
-					if (!results.landmarks || results.landmarks.length === 0) {
-						return requestAnimationFrame(loop);
-					}
-
-					const hands = results.landmarks.map((lm, i) => {
-						const handed = results.handedness?.[i]?.[0]?.categoryName || "Unknown";
-
-						return {
-							handedness: handed,
-							points: lm.map((p) => ({
-								x: p.x,
-								y: p.y,
-								z: p.z,
-							})),
-						};
-					});
-
-					if (!modelReadyRef.current) return requestAnimationFrame(loop);
-
-					const flat = preprocessHands(hands);
-
-					const prediction = await predictLocal(flat);
-
-					if (!prediction) return requestAnimationFrame(loop);
-
-					const { label, confidence } = prediction;
-
-					if (!label || confidence < 0.7) {
-						return requestAnimationFrame(loop);
-					}
-
-					// --- Stability Check ---
-					if (label === lastLabel) {
-						stableCount++;
-					} else {
-						stableCount = 1;
-						lastLabel = label;
-					}
-
-					// 🔥 Preview only after 3 stable frames
-					if (stableCount >= 3) {
-						const preview = sentenceRef.current ? `${sentenceRef.current} ${label}`.trim() : label;
-
-						setCurrentWord(preview);
-					}
-
-					// 🔥 Append only after stronger stability
-					if (stableCount >= 8) {
-						const words = sentenceRef.current.split(" ");
-						const lastWord = words[words.length - 1];
-
-						if (lastWord?.toLowerCase() !== label.toLowerCase()) {
-							sentenceRef.current = (sentenceRef.current + " " + label).trim();
-						}
-
-						setCurrentWord(sentenceRef.current);
-						stableCount = 0;
-					}
-				} catch (err) {
-					console.error("Prediction error:", err);
-				}
-
-				requestAnimationFrame(loop);
+			if (label === lastLabel) {
+				stableCount++;
+			} else {
+				stableCount = 1;
+				lastLabel = label;
 			}
 
-			loop();
+			if (stableCount >= 3) {
+				const preview = sentenceRef.current
+					? `${sentenceRef.current} ${label}`.trim()
+					: label;
+
+				setCurrentWord(preview);
+			}
+
+			if (stableCount >= 7) {
+				const words = sentenceRef.current.split(" ");
+				const lastWordInSentence = words[words.length - 1];
+
+				if (lastWordInSentence?.toLowerCase() !== label.toLowerCase()) {
+					sentenceRef.current =
+						(sentenceRef.current + " " + label).trim();
+				}
+
+				setCurrentWord(sentenceRef.current);
+				stableCount = 0;
+			}
+		};
+
+		// 🔥 Frame Capture Loop
+		const canvas = document.createElement("canvas");
+		const ctx = canvas.getContext("2d");
+
+		canvas.width = 480;
+		canvas.height = 360;
+
+		const PREDICTION_INTERVAL = 200; // 5 FPS
+		let lastPredictionTime = 0;
+
+		function loop() {
+			if (!isRunning || !localVideoRef.current) {
+				requestAnimationFrame(loop);
+				return;
+			}
+
+			const now = Date.now();
+			if (now - lastPredictionTime < PREDICTION_INTERVAL) {
+				requestAnimationFrame(loop);
+				return;
+			}
+			lastPredictionTime = now;
+
+			const video = localVideoRef.current;
+
+			if (!video.videoWidth) {
+				requestAnimationFrame(loop);
+				return;
+			}
+
+			ctx.drawImage(video, 0, 0, 480, 360);
+
+			if (
+				signSocket.current &&
+				signSocket.current.readyState === WebSocket.OPEN &&
+				!isProcessing
+			) {
+				isProcessing = true;
+
+				canvas.toBlob(
+					(blob) => {
+						if (blob) {
+							signSocket.current.send(blob);
+						}
+					},
+					"image/jpeg",
+					0.6
+				);
+			}
+
+			requestAnimationFrame(loop);
 		}
 
-		initMediaPipe();
+		loop();
 
 		return () => {
 			isRunning = false;
+			signSocket.current?.close();
 			window.removeEventListener("clear-translation", clearListener);
 		};
 	}, [callActive, localType]);
@@ -618,6 +511,7 @@ export default function VideoCallPage() {
 		return () => {
 			pc.current?.close();
 			socket.current?.disconnect();
+			signSocket.current?.close();
 		};
 	}, []);
 
