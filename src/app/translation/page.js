@@ -71,29 +71,42 @@ export default function VideoCallPage() {
 				baseOptions: {
 					modelAssetPath:
 						"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+					delegate: "GPU",
 				},
 				runningMode: "VIDEO",
 				numHands: 2,
+				minHandDetectionConfidence: 0.6,
+				minHandPresenceConfidence: 0.6,
+				minTrackingConfidence: 0.6,
 			});
 			faceRef.current = await FaceLandmarker.createFromOptions(vision, {
 				baseOptions: {
 					modelAssetPath:
 						"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+					delegate: "GPU",
 				},
 				runningMode: "VIDEO",
 				numFaces: 1,
+				minFaceDetectionConfidence: 0.6,
+				minFacePresenceConfidence: 0.6,
+				minTrackingConfidence: 0.6,
 			});
 			poseRef.current = await PoseLandmarker.createFromOptions(vision, {
 				baseOptions: {
 					modelAssetPath:
 						"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+					delegate: "GPU",
 				},
 				runningMode: "VIDEO",
+				minPoseDetectionConfidence: 0.6,
+				minPosePresenceConfidence: 0.6,
+				minTrackingConfidence: 0.6,
 			});
 			ort.env.wasm.wasmPaths = "/ort/";
-			ort.env.wasm.numThreads = 1;
+			ort.env.wasm.numThreads = 2;
 			sessionRef.current = await ort.InferenceSession.create("/model/sign_model.onnx", {
 				executionProviders: ["wasm"],
+				graphOptimizationLevel: "all",
 			});
 			meanRef.current = await fetch("/model/mean.json").then((r) => r.json());
 			stdRef.current = await fetch("/model/std.json").then((r) => r.json());
@@ -523,8 +536,18 @@ export default function VideoCallPage() {
 		let animationId;
 		let isProcessing = false;
 		let lastPredictionTime = 0;
-		const PREDICTION_INTERVAL = 50;
+		const PREDICTION_INTERVAL = 100;
 		const sentenceRef = { current: "" };
+
+		// Pre-create canvas for performance
+		const canvas = document.createElement("canvas");
+		canvas.width = 320;
+		canvas.height = 240;
+		const ctx = canvas.getContext("2d", {
+			willReadFrequently: true,
+			alpha: false,
+		});
+		detectionCanvasRef.current = canvas;
 
 		// Sliding window majority voting — mirrors Python deque(maxlen=15) + Counter logic
 		const WINDOW_SIZE = 15;
@@ -533,6 +556,9 @@ export default function VideoCallPage() {
 		const predictionBuffer = [];
 		let cooldown = 0;
 		let lastOutput = "";
+		let clearStartTime = null;
+		let clearTriggered3s = false;
+		let clearTriggered5s = false;
 
 		const clearListener = () => {
 			sentenceRef.current = "";
@@ -573,15 +599,9 @@ export default function VideoCallPage() {
 			}
 			isProcessing = true;
 
-			// Draw to 640×480 canvas to match Python training resolution
-			if (!detectionCanvasRef.current) {
-				detectionCanvasRef.current = document.createElement("canvas");
-			}
+			// Use pre-created canvas
 			const canvas = detectionCanvasRef.current;
-			canvas.width = 640;
-			canvas.height = 480;
-			const ctx = canvas.getContext("2d");
-			ctx.drawImage(video, 0, 0, 640, 480);
+			ctx.drawImage(video, 0, 0, 320, 240);
 
 			const now = performance.now();
 
@@ -604,7 +624,11 @@ export default function VideoCallPage() {
 				return;
 			}
 
-			const normalized = features.map((v, i) => (v - meanRef.current[i]) / stdRef.current[i]);
+			// Optimize normalization with typed array
+			const normalized = new Float32Array(158);
+			for (let i = 0; i < 158; i++) {
+				normalized[i] = (features[i] - meanRef.current[i]) / stdRef.current[i];
+			}
 
 			const tensor = new ort.Tensor("float32", normalized, [1, 158]);
 			const output = await sessionRef.current.run({ input: tensor });
@@ -641,14 +665,51 @@ export default function VideoCallPage() {
 				if (topCount >= REQUIRED_COUNT) stableLabel = topLabel;
 			}
 
-			// Cooldown — mirrors Python cooldown_timer logic
-			if (cooldown > 0) {
-				cooldown--;
-			} else if (stableLabel && stableLabel !== lastOutput) {
-				lastOutput = stableLabel;
-				sentenceRef.current = sentenceRef.current ? `${sentenceRef.current} ${stableLabel}` : stableLabel;
-				setCurrentWord(sentenceRef.current);
-				cooldown = COOLDOWN_FRAMES;
+			// ================================
+			// 🔴 CLEAR HANDLING FIRST
+			// ================================
+			if (stableLabel === "Clear") {
+				if (!clearStartTime) {
+					clearStartTime = Date.now();
+				}
+
+				const heldTime = Date.now() - clearStartTime;
+
+				if (heldTime >= 5000 && !clearTriggered5s) {
+					sentenceRef.current = "";
+					setCurrentWord("");
+					predictionBuffer.length = 0;
+					clearTriggered5s = true;
+					clearTriggered3s = true;
+					console.log("🔥 Cleared ALL words (5s hold)");
+				} else if (heldTime >= 3000 && !clearTriggered3s) {
+					const words = sentenceRef.current ? sentenceRef.current.split(" ").filter(Boolean) : [];
+					words.pop();
+					sentenceRef.current = words.join(" ");
+					setCurrentWord(sentenceRef.current);
+					clearTriggered3s = true;
+					console.log("🧹 Removed last word (3s hold)");
+				}
+			} else {
+				// Reset clear state
+				clearStartTime = null;
+				clearTriggered3s = false;
+				clearTriggered5s = false;
+
+				// ================================
+				// 🟢 NORMAL WORD LOGIC
+				// ================================
+				if (cooldown > 0) {
+					cooldown--;
+				}
+
+				if (stableLabel && cooldown === 0 && stableLabel !== lastOutput) {
+					lastOutput = stableLabel;
+					sentenceRef.current = sentenceRef.current ? `${sentenceRef.current} ${stableLabel}` : stableLabel;
+
+					setCurrentWord(sentenceRef.current);
+					cooldown = COOLDOWN_FRAMES;
+				}
 			}
 
 			isProcessing = false;
