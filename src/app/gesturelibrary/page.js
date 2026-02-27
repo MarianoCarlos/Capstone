@@ -3,8 +3,6 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "@/utils/firebaseConfig";
 import { Home, Book, Camera, User, MessageSquare, HistoryIcon } from "lucide-react";
 
 export default function GestureLibrary() {
@@ -12,17 +10,15 @@ export default function GestureLibrary() {
 	const [searchTerm, setSearchTerm] = useState("");
 	const [filter, setFilter] = useState("all");
 	const [loading, setLoading] = useState(true);
+	const [imageErrors, setImageErrors] = useState(new Set());
 	const pathname = usePathname();
 
-	// 🔥 Fetch gestures from Firestore
+	// �️ Fetch gestures from assets API
 	useEffect(() => {
 		const fetchGestures = async () => {
 			try {
-				const querySnapshot = await getDocs(collection(db, "gestures"));
-				const data = querySnapshot.docs.map((doc) => ({
-					id: doc.id,
-					...doc.data(),
-				}));
+				const response = await fetch("/api/gestures");
+				const data = await response.json();
 				setGestures(data);
 			} catch (error) {
 				console.error("❌ Error fetching gestures:", error);
@@ -116,30 +112,48 @@ export default function GestureLibrary() {
 					<p className="text-center text-gray-600 dark:text-gray-400">Loading gestures...</p>
 				) : (
 					<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-8">
-						{filteredGestures.map((gesture) => (
-							<div
-								key={gesture.id}
-								className="rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-700 shadow hover:shadow-lg transition-transform hover:-translate-y-1 bg-white dark:bg-gray-800"
-							>
-								{gesture.type === "image" ? (
-									<img
-										src={gesture.src}
-										alt={gesture.title}
-										className="w-full h-48 object-contain bg-gray-100 dark:bg-gray-900"
-									/>
-								) : (
-									<video
-										src={gesture.src}
-										controls
-										className="w-full h-48 object-contain bg-gray-100 dark:bg-gray-900"
-									/>
-								)}
-								<div className="p-4 text-center">
-									<h3 className="text-lg font-bold text-gray-900 dark:text-white">{gesture.title}</h3>
-									<p className="text-sm text-gray-600 dark:text-gray-300 capitalize">{gesture.category}</p>
+						{filteredGestures.map((gesture) => {
+							// Use the image source directly from the gesture object
+							const assetImageUrl = gesture.src;
+
+							const hasImageError = imageErrors.has(gesture.id);
+							const handleImageError = () => {
+								console.warn(`❌ Missing image for gesture: "${gesture.title}" - Expected: ${assetImageUrl}`);
+								setImageErrors(prev => new Set(prev).add(gesture.id));
+							};
+
+							return (
+								<div
+									key={gesture.id}
+									className="rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-700 shadow hover:shadow-lg transition-all hover:-translate-y-1 bg-white dark:bg-gray-800 flex flex-col h-full"
+								>
+									{/* Asset Image Section */}
+									<div className="relative w-full h-64 bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-900 dark:to-gray-800">
+										{!hasImageError ? (
+											<img
+												src={assetImageUrl}
+												alt={gesture.title}
+												className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
+												onError={handleImageError}
+											/>
+										) : (
+											<div className="w-full h-full flex items-center justify-center">
+												<div className="text-center text-gray-500 dark:text-gray-400 px-2">
+													<p className="text-sm">Image not found</p>
+											<p className="text-xs opacity-60">{gesture.title.trim()}</p>
+												</div>
+											</div>
+										)}
+									</div>
+
+									{/* Gesture Info */}
+									<div className="p-4 text-center flex-grow flex flex-col justify-center">
+										<h3 className="text-lg font-bold text-gray-900 dark:text-white">{gesture.title}</h3>
+										<p className="text-sm text-gray-600 dark:text-gray-300 capitalize">{gesture.category}</p>
+									</div>
 								</div>
-							</div>
-						))}
+							);
+						})}
 
 						{filteredGestures.length === 0 && !loading && (
 							<p className="col-span-full text-center text-gray-700 dark:text-gray-300 mt-6">
